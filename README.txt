@@ -1,32 +1,29 @@
-Infinispan Client Console design
---------------------------------
+Infinispan Console
+------------------
 
-Infinispan Client Console would be a linux console tool that would be 
-capable of doing simple operations with the infinispan cache using
-the chosen client access (hotrod, memcached, rest/http)
-This might be handy for cache debugging purposes and maybe have some
-usecases for linux shell scripts wanting to use infinispan cache.
-
-it will be able to process a file with simple cache commands.
+Infinispan Console is a linux console tool written in python capable of doing simple operations with infinispan cache using
+the chosen client access (hotrod, memcached, rest/http). This might be handy for cache debugging/testing purposes and also provides
+a command line interface usable by linux shell scripts.
 
 usage
 -----
 
-ispncon [options] <operation> <operation_options> <op_arguments>
-	-c --client (default: hotrod, other possible values memcached, rest)
-	-h --host <host> (default: localhost) 
-	-p --port <port> (default: 11222(hotrod), 11211(memcached), 8080(rest))
-	-v --version prints the ispncon version
+ispncon [options] <operation> [operation_options] <op_arguments>
+	-c --client         client to use (default: hotrod, other possible values memcached, rest)
+	-h --host <host>    hostname/ip address to connect to (default: localhost) 
+	-p --port <port>    port to connect to (default: 11222(hotrod), 11211(memcached), 8080(rest))
+	-v --version        prints the ispncon version and exits
+	-e --exit-on-error  if operation fails, don't print ERROR output, but fail with error exit code
 
 config file
 -----------
-file ~/.ispncon will be read in the beginning if exists
-it contains properties in form of setconfig commands	
+file ~/.ispncon will be read in the beginning and presets the values that can be set via setconfig commands.
 
 operations
 ----------
 
-usually operations return something to the stdout
+in most cases each operation returns something to stdout, ie the output can be parsed and decided upon by a shell script.
+the script has also possibility to specify -e option and capture the exit code of previous operation.
 
 help
 ====
@@ -56,46 +53,82 @@ puts the specified entry (key, value) into the cache
                    and doesn't put anything in that case
   
   return:
+    (exit code 0)
     * in case the entry was stored successfully, one line: 
     STORED
-    * in case of error, one line: 
+
+    (exit code 1)
+    * in case of general error, one line: 
     ERROR <msg>
-    * if option -a was used and the entry already exists, one line: 
+
+    (exit code 2)
+    * if option -v was used and entry doesn't exist, one line:
+    NOT_FOUND
+
+    (exit code 3)
+    * if option -a was used and the entry already exists, or -v was used and versions don't match, one line: 
     CONFLICT
+    
 
 get
 ===
 
 gets the value under specific key from the cache
+
   format:
     get [options] <key>
 
   options:
     -o <filename>  stores the output of the get operation into the file specified
-    -V             gets version of the data
+    -v             gets version of the data
     
   return:
+    (exit code 0)
     * in case no filename was specified
     <data...
     ... possibly on multiple lines
     ... possibly binary content, not suitable for terminal>
     * in case a filename was specified
     no output
-    * in case -V was specified, the output is prepended with one line
+    * in case -v was specified, the output is prepended with one line
     VERSION <version>
+    
+    (exit code 1)
+    * in case of general error, one line: 
+    ERROR <msg>
+    
+    (exit code 2)
+    * if the requested entry wasn't found in the cache, one line:
+    NOT_FOUND
 
 delete
 ======
 
-delete [options] <key>
-deletes the entry under given key 
+deletes the value under the specified key
+  
+  format:
+    delete [options] <key>
 
-stdout:
-DELETED - when deleted successfully
-or
-NOT_FOUND -when entry didn't exist
-or
-CONFLICT - if version was specified and entry didn't have the version required
+  options:
+    -v <version> deletes only if the specified version matches the version in the cache
+    
+  return: 
+    (exit code 0)
+    * entry was successfully deleted, one line:
+    DELETED
+    
+    (exit code 1)
+    * in case of general error, one line: 
+    ERROR <msg>
+    
+    (exit code 2)
+    * if the entry wasn't found in the cache, one line:
+    NOT_FOUND
+    
+    (exit code 3)
+    * if option -v was used and versions don't match, one line: 
+    CONFLICT
+
 
 clear
 =====
