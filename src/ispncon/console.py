@@ -4,8 +4,8 @@
 """
 Command parsing and execution
 """
-from ispncon import ISPNCON_VERSION, HELP
-from ispncon.client import fromString, CacheClientError, ConflictError,\
+from ispncon import ISPNCON_VERSION, HELP, USAGE
+from ispncon.client import fromString, CacheClientError, ConflictError, \
   NotFoundError
 import getopt
 import shlex
@@ -28,6 +28,7 @@ class CommandExecutor:
     self.client = None
     self.exit_on_error = exit_on_error
     exit_on_error
+    
   # get the client lazily
   def _get_client(self):
     if self.client == None:
@@ -36,10 +37,13 @@ class CommandExecutor:
       except CacheClientError as e:
         raise e
       except Exception as e:
-        self._error("creating client: %s" % e.args)
+        self._error("creating client: %s" % str(e.args))
     return self.client
       
   def _cmd_include(self, args):
+    if (len(args) != 1):
+      self._error("Wrong include command syntax.")
+      
     f = open(args[0], 'r')
     for line in f:
         self.execute(line)
@@ -153,12 +157,64 @@ class CommandExecutor:
   
   def _cmd_help(self, args):
     if (len(args) == 0):
-      print "Supported operations: \n", "\n".join(sorted(["%s\t%s" % (x, HELP[x].split("\n")[0]) for x in HELP.keys()]))
+      print "Supported operations: \n", "\n".join(sorted(["%s\t\t%s" % (x, HELP[x].split("\n")[0]) for x in HELP.keys()]))
       return
     helptext = HELP.get(args[0])
     if (helptext == None):
       self._error("Can't display help. Unknown operation: %s" % args[0])
     print helptext
+  
+  def _cmd_clear(self, args):
+    if (len(args) != 0):
+      self._error("Clear command doesn't have any arguments.")
+    self._get_client().clear()
+
+  def _cmd_exists(self, args):
+    _client = self._get_client()
+    if (len(args) < 1):
+      self._error("You must supply key.")
+    if (len(args) > 1):
+      self._error("Wrong exists command syntax.")
+    _client.exists(args[0])
+    print "EXISTS"
+
+  def _cmd_config(self, args):
+    if (len(args) == 0):
+      print "host=%s" % self.host
+      print "port=%s" % self.port
+      print "cache=%s" % self.cache
+      print "client.type=%s" % self.client_name
+      return
+    if (len(args) == 1):
+      if (args[0] != "save"):
+        self._error("Wrong config command syntax.")
+      else:
+        #TODO
+        self._error("Saving of configuration is not yet supported!")
+    if (len(args) > 2):
+      self._error("Wrong config command syntax.")
+
+    key = args[0]
+    value = args[1]
+    if key == "host":
+      self.host = value
+      self.client = None # throw away the old client
+      self._get_client() # try to create new one
+    elif key == "port":
+      self.port  = value
+      self.client = None # throw away the old client
+      self._get_client() # try to create new one
+    elif key == "cache":
+      self.cache  = value
+      self.client = None # throw away the old client
+      self._get_client() # try to create new one
+    elif key == "client.name":
+      self.client_name  = value
+      self.client = None # throw away the old client
+      self._get_client() # try to create new one
+    else:
+      self._error("Unknown configuration key.")      
+    print "STORED"
   
   def _error(self, msg):
     raise CommandExecutionError(msg)
@@ -185,6 +241,12 @@ class CommandExecutor:
         self._cmd_include(args)
       elif cmd == "help":
         self._cmd_help(args)
+      elif cmd == "clear":
+        self._cmd_clear(args)
+      elif cmd == "exists":
+        self._cmd_exists(args)
+      elif cmd == "config":
+        self._cmd_config(args)
       else:
         self._error("unknown command: %s" % cmd)
     except CommandExecutionError as e:
@@ -199,22 +261,12 @@ class CommandExecutor:
     except CacheClientError as e: # most general cache client error, it has to be handled last
       print "ERROR", e.msg
       self._possiblyexit(1)
-
-def usage():
-  print("USAGE: ispncon [options] <operation> [operation_options] <op_arguments>")
-  print("    -c --client         client to use (default: hotrod, other possible values memcached, rest)")
-  print("    -h --host <host>    hostname/ip address to connect to (default: localhost) ")
-  print("    -p --port <port>    port to connect to (default: 11222(hotrod), 11211(memcached), 8080(rest))")
-  print("    -v --version        prints the ispncon version and exits")
-  print("    -e --exit-on-error  if operation fails, don't print ERROR output, but fail with error exit code")
-  print("    use operation help to get list of supported operations")
-  print("    or help <operation> to display info on particular operation")
  
 def main(args):
   try:
     opts, args = getopt.getopt(sys.argv[1:], "c:h:p:C:v:e", ["client=", "host=", "port=", "cache-name=", "version", "exit-on-error"])
   except getopt.GetoptError:          
-    usage()                         
+    print USAGE              
     sys.exit(2)     
   client = "hotrod"
   host = "localhost"

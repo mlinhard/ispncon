@@ -133,34 +133,81 @@ deletes the value under the specified key
 clear
 =====
 
-clear
 clears the cache
-stdout:
-DELETED
+  
+  format:
+    clear
+
+  return: 
+    (exit code 0)
+    * cache was successfully cleared, one line:
+    DELETED
+    
+    (exit code 1)
+    * in case of general error, one line: 
+    ERROR <msg>
+    
 
 exists
 ======
 
-exists <key>
-stdout:
-EXISTS - if value exists
-NOT_FOUND - if not
+verifies if the entry exists in the cache
 
-setconfig
-=========
+  format:
+    exists <key>
+  
+  return:
+    (exit code 0)
+    * in case entry with given key exists, one line:
+    EXISTS
+    
+    (exit code 1)
+    * in case of general error, one line: 
+    ERROR <msg>
+    
+    (exit code 2)
+    * if the requested entry wasn't found in the cache, one line:
+    NOT_FOUND
 
-setconfig key value
-	cache - cache name
-	host - host name
-	port - port on host
-	client - client type: hotrod|memcached|rest
+config
+======
+
+changes internal state/config of the client. this has only client-side effect.
+  
+  format:
+    config                   - to print current config
+    config save              - to save config to ~/.ispncon
+    config <key> <value>     - to change config for currently running session
+    
+  configuration values:
+  cache       - cache name
+  host        - host name
+  port        - port on host
+  client.type - client type: hotrod|memcached|rest
+  
+  return:
+    (exit code 0)
+    * if configuration/client state was updated successfully, one line:
+    STORED
+    * if config with no parameters was supplied
+    <multiple line output,
+     with config values>
+    
+    (exit code 1)
+    * in case of general error, one line: 
+    ERROR <msg>
 
 include
 =======
 
-include <filename>
-	processes cache commands from specified file
+processes cache commands from the specified file. the output depends on the commands present in the input file.
+the commands will be processed line by line.
 
+  format:
+    include <filename>
+	
+  return:
+    exit code = exit code of the last command in the file.
 
 
 

@@ -151,6 +151,16 @@ class HotRodCacheClient(CacheClient):
     except RemoteCacheError as e:
       raise CacheClientError(e.args)
     
+  def clear(self):
+    self.remote_cache.clear()
+    
+  def exists(self, key):
+    try:
+      if not self.remote_cache.contains_key(key):
+        raise NotFoundError
+    except RemoteCacheError as e:
+      raise CacheClientError(e.args) 
+    
 #TODO other implementations
    
 class MemcachedCacheClient(CacheClient):

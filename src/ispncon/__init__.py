@@ -9,6 +9,15 @@ __copyright__ = "(C) 2011 Red Hat Inc."
 
 ISPNCON_VERSION = "0.8.0"
 
+USAGE = """USAGE: ispncon [options] <operation> [operation_options] <op_arguments>")
+    -c --client         client to use (default: hotrod, other possible values memcached, rest)")
+    -h --host <host>    hostname/ip address to connect to (default: localhost) ")
+    -p --port <port>    port to connect to (default: 11222(hotrod), 11211(memcached), 8080(rest))")
+    -v --version        prints the ispncon version and exits")
+    -e --exit-on-error  if operation fails, don't print ERROR output, but fail with error exit code")
+    use operation help to get list of supported operations")
+    or help <operation> to display info on particular operation")"""
+
 HELP = {
   "put" : """puts the specified entry (key, value) into the cache
 
@@ -55,6 +64,97 @@ HELP = {
     help <operation>
     
   note:
-    if no operation is supplied, prints list of supported operations"""
+    if no operation is supplied, prints list of supported operations""",
+    
+  "delete" : """deletes the value under the specified key
+
+  format:
+    delete [options] <key>
+
+  options:
+    -v <version> deletes only if the specified version matches the version in the cache
+
+  return: 
+    (exit code 0)
+    * entry was successfully deleted, one line:
+    DELETED
+
+    (exit code 1)
+    * in case of general error, one line: 
+    ERROR <msg>
+
+    (exit code 2)
+    * if the entry wasn't found in the cache, one line:
+    NOT_FOUND
+
+    (exit code 3)
+    * if option -v was used and versions don't match, one line: 
+    CONFLICT""",
+    
+  "clear" : """clears the cache
+
+  format:
+    clear
+
+  return: 
+    (exit code 0)
+    * cache was successfully cleared, one line:
+    DELETED
+
+    (exit code 1)
+    * in case of general error, one line: 
+    ERROR <msg>""",
+
+  "exists" : """verifies if the entry exists in the cache
+    
+  format:
+    exists <key>
+  
+  return:
+    (exit code 0)
+    * in case entry with given key exists, one line:
+    EXISTS
+    
+    (exit code 1)
+    * in case of general error, one line: 
+    ERROR <msg>
+    
+    (exit code 2)
+    * if the requested entry wasn't found in the cache, one line:
+    NOT_FOUND""",
+    
+  "config" : """changes internal state/config of the client. this has only client-side effect.
+  
+  format:
+    config                   - to print current config
+    config save              - to save config to ~/.ispncon
+    config <key> <value>     - to change config for currently running session
+    
+  configuration values:
+  cache       - cache name
+  host        - host name
+  port        - port on host
+  client.type - client type: hotrod|memcached|rest
+  
+  return:
+    (exit code 0)
+    * if configuration/client state was updated successfully, one line:
+    STORED
+    * if config with no parameters was supplied
+    <multiple line output,
+     with config values>
+    
+    (exit code 1)
+    * in case of general error, one line: 
+    ERROR <msg>""",
+    
+  "include" : """processes cache commands from the specified file. 
+  the output depends on the commands present in the input file. the commands will be processed line by line.
+
+  format:
+    include <filename>
+  
+  return:
+    exit code = exit code of the last command in the file."""
                     
 }
