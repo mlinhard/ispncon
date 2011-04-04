@@ -10,9 +10,61 @@ from ispncon.client import fromString, CacheClientError, ConflictError, \
 import getopt
 import shlex
 import sys
+import ConfigParser
+import os
 
 __author__ = "Michal Linhard"
 __copyright__ = "(C) 2011 Red Hat Inc."
+
+MAIN_CONFIG_SECTION = "ispncon"
+KNOWN_CONFIG_KEYS = ["client_type", "host", "port", "cache", "exit_on_error", "rest.server_url", "rest.content_type"]
+
+class Config(dict):
+  def _override_with_user_config(self):
+    user_cfg_file = os.path.expanduser("~/.ispncon")
+    if not os.path.exists(user_cfg_file):
+      return
+    cfgp = ConfigParser.ConfigParser(allow_no_value=True)
+    cfgp.read(user_cfg_file)
+    for key, value in cfgp.items(MAIN_CONFIG_SECTION):
+      self[key]=value
+    for section in cfgp.sections():
+      if section != MAIN_CONFIG_SECTION:
+        for key, value in cfgp.items(section):
+          self[section + "." + key] = value
+        
+  def __init__(self, *args, **kw):
+    super(Config, self).__init__(*args, **kw)
+    # set defaults
+    self["client_type"] = "hotrod"
+    self["host"] = "localhost"
+    self["port"] = "11222"
+    self["cache"] = None
+    self["exit_on_error"] = False
+    self["rest.server_url"] = "/infinispan-server-rest/rest"
+    self["rest.content_type"] = "text/plain"
+    # override with whatever is in ~/.ispncon file
+    self._override_with_user_config()
+    
+  
+    
+  def __str__(self):
+    str = ""
+    for  key in KNOWN_CONFIG_KEYS:
+      str += "%s = %s\n" % (key, self[key])
+    return str
+  
+  def __setitem__(self, key, value):
+    if not key in KNOWN_CONFIG_KEYS:
+      self._error("Unknown config key: %s" % key)
+    super(Config, self).__setitem__(key, value)
+
+  def _error(self, msg):
+    raise CommandExecutionError(msg)
+  
+  def save(self):
+    #TODO
+    self._error("Saving of configuration is not yet supported!")
 
 class CommandExecutionError(Exception):
   def __init__(self, msg, exit_code=1):
@@ -20,20 +72,16 @@ class CommandExecutionError(Exception):
     self.exit_code = exit_code
 
 class CommandExecutor:
-  def __init__(self, client_name, host, port, cache, exit_on_error):
-    self.client_name = client_name
-    self.host = host
-    self.port = port
-    self.cache = cache
+  def __init__(self, config):
+    self.config = config
+    self.exit_on_error = self.config["exit_on_error"]
     self.client = None
-    self.exit_on_error = exit_on_error
-    exit_on_error
     
   # get the client lazily
   def _get_client(self):
     if self.client == None:
       try:
-        self.client = fromString(self.client_name, self.host, self.port, self.cache)
+        self.client = fromString(self.config)
       except CacheClientError as e:
         raise e
       except Exception as e:
@@ -157,7 +205,7 @@ class CommandExecutor:
   
   def _cmd_help(self, args):
     if (len(args) == 0):
-      print "Supported operations: \n", "\n".join(sorted(["%s\t\t%s" % (x, HELP[x].split("\n")[0]) for x in HELP.keys()]))
+      print "Supported operatiotype: <class 'ispncon.console.Config'>ns: \n", "\n".join(sorted(["%s\t\t%s" % (x, HELP[x].split("\n")[0]) for x in HELP.keys()]))
       return
     helptext = HELP.get(args[0])
     if (helptext == None):
@@ -180,40 +228,19 @@ class CommandExecutor:
 
   def _cmd_config(self, args):
     if (len(args) == 0):
-      print "host=%s" % self.host
-      print "port=%s" % self.port
-      print "cache=%s" % self.cache
-      print "client.type=%s" % self.client_name
+      print self.config
       return
     if (len(args) == 1):
       if (args[0] != "save"):
         self._error("Wrong config command syntax.")
       else:
-        #TODO
-        self._error("Saving of configuration is not yet supported!")
+        self.config.save()
     if (len(args) > 2):
       self._error("Wrong config command syntax.")
 
-    key = args[0]
-    value = args[1]
-    if key == "host":
-      self.host = value
-      self.client = None # throw away the old client
-      self._get_client() # try to create new one
-    elif key == "port":
-      self.port  = value
-      self.client = None # throw away the old client
-      self._get_client() # try to create new one
-    elif key == "cache":
-      self.cache  = value
-      self.client = None # throw away the old client
-      self._get_client() # try to create new one
-    elif key == "client.name":
-      self.client_name  = value
-      self.client = None # throw away the old client
-      self._get_client() # try to create new one
-    else:
-      self._error("Unknown configuration key.")      
+    self.config[args[0]] = args[1]
+    self.client = None # throw away the old client
+    self._get_client() # try to create new one
     print "STORED"
   
   def _error(self, msg):
@@ -268,26 +295,23 @@ def main(args):
   except getopt.GetoptError:          
     print USAGE              
     sys.exit(2)     
-  client = "hotrod"
-  host = "localhost"
-  port = "11222"
-  cache = None
-  exit_on_error = False
+
+  config = Config() # values here will be overriden by anything passed in commandline
   for opt, arg in opts:
     if opt in ("-c", "--client"):
-      client = arg
+      config["client_type"] = arg
     if opt in ("-h", "--host"):
-      host = arg
+      config["host"] = arg
     if opt in ("-p", "--port"):
-      port = arg
+      config["port"] = arg
     if opt in ("-C", "--cache-name"):
-      cache = arg
+      config["cache"] = arg
     if opt in ("-v", "--version"):
       print ISPNCON_VERSION
       sys.exit(0)
     if opt in ("-e", "--exit-on-error"):
-      exit_on_error = True
-  executor = CommandExecutor(client, host, port, cache, exit_on_error)
+      config["exit_on_error"] = True
+  executor = CommandExecutor(config)
   isatty = sys.stdin.isatty()
   prompt = "> " if isatty else ""
   if (len(args) == 0):
