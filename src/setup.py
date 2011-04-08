@@ -22,7 +22,8 @@ setup(name = 'ispncon',
       install_requires = [
         'setuptools',
         'greenlet',
-        'infinispan'
+        'infinispan',
+        'python-memcached'
       ],
       long_description = "See `Infinispan Console <https://github.com/mlinhard/ispncon>`_ for more information."
       )

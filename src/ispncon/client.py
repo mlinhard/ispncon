@@ -10,6 +10,7 @@ MemcachedCacheClient
 """
 from infinispan.remotecache import RemoteCache, RemoteCacheError
 from httplib import HTTPConnection, CONFLICT, OK, NOT_FOUND, NO_CONTENT
+from memcache import Client
 
 __author__ = "Michal Linhard"
 __copyright__ = "(C) 2011 Red Hat Inc."
@@ -44,14 +45,15 @@ class CacheClient(object):
     pass
   def clear(self):
     pass
+  def _error(self, msg):
+    raise CacheClientError(msg)
   
 def fromString(config):
   client_str = config["client_type"]
   if client_str == "hotrod":
     return HotRodCacheClient(config)
   elif client_str == "memcached":
-#    return MemcachedCacheClient(host, port, cache_name)
-    raise CacheClientError("memcached client is not supported yet!")
+    return MemcachedCacheClient(config)
   elif client_str == "rest":
     return RestCacheClient(config)
   else:
@@ -96,7 +98,7 @@ class HotRodCacheClient(CacheClient):
           try:
             numversion = int(version)
           except ValueError:
-            raise CacheClientError("hotrod client only accepts numeric versions")
+            self._error("hotrod client only accepts numeric versions")
           retval = self.remote_cache.replace_with_version(key, value, numversion, lifespan, max_idle)
           if retval == 1:
             return
@@ -105,9 +107,9 @@ class HotRodCacheClient(CacheClient):
           elif retval == -1:
             raise ConflictError
           else:
-            raise CacheClientError("unexpected return value from hotrod client")
+            self._error("unexpected return value from hotrod client")
     except RemoteCacheError as e:
-      raise CacheClientError(e.args)
+      self._error(e.args)
         
   def get(self, key, get_version=False):
     try:
@@ -124,7 +126,7 @@ class HotRodCacheClient(CacheClient):
       else:
         return value
     except RemoteCacheError as e:
-      raise CacheClientError(e.args)
+      self._error(e.args)
 
   def delete(self, key, version=None):
     try:
@@ -139,7 +141,7 @@ class HotRodCacheClient(CacheClient):
         try:
           numversion = int(version)
         except ValueError:
-          raise CacheClientError("hotrod client only accepts numeric versions")
+          self._error("hotrod client only accepts numeric versions")
         retval = self.remote_cache.remove_with_version(key, numversion)
         if retval == 1:
           return
@@ -148,10 +150,10 @@ class HotRodCacheClient(CacheClient):
         elif retval == -1:
           raise ConflictError
         else:
-          raise CacheClientError("unexpected return value from hotrod client")
+          self._error("unexpected return value from hotrod client")
       
     except RemoteCacheError as e:
-      raise CacheClientError(e.args)
+      self._error(e.args)
     
   def clear(self):
     self.remote_cache.clear()
@@ -161,7 +163,7 @@ class HotRodCacheClient(CacheClient):
       if not self.remote_cache.contains_key(key):
         raise NotFoundError
     except RemoteCacheError as e:
-      raise CacheClientError(e.args) 
+      self._error(e.args) 
 
 REST_SERVER_URL = "/infinispan-server-rest/rest"
     
@@ -208,7 +210,7 @@ class RestCacheClient(CacheClient):
     elif resp.status == CONFLICT:
       raise ConflictError
     else:
-      raise CacheClientError("Unexpected HTTP Status: %s" % resp.status)
+      self._error("Unexpected HTTP Status: %s" % resp.status)
     
   def get(self, key, get_version=False):
     url = self._makeurl(key)
@@ -223,7 +225,7 @@ class RestCacheClient(CacheClient):
     elif resp.status == NOT_FOUND:
       raise NotFoundError
     else:
-      raise CacheClientError("Unexpected HTTP Status: %s" % resp.status)
+      self._error("Unexpected HTTP Status: %s" % resp.status)
 
   def delete(self, key, version=None):
     url = self._makeurl(key)
@@ -240,7 +242,7 @@ class RestCacheClient(CacheClient):
     elif resp.status == CONFLICT:
       raise ConflictError
     else:
-      raise CacheClientError("Unexpected HTTP Status: %s" % resp.status)
+      self._error("Unexpected HTTP Status: %s" % resp.status)
     
   def clear(self):
     url = self._makeurl(None)
@@ -250,7 +252,7 @@ class RestCacheClient(CacheClient):
     if resp.status == NO_CONTENT:
       return
     else:
-      raise CacheClientError("Unexpected HTTP Status: %s" % resp.status)
+      self._error("Unexpected HTTP Status: %s" % resp.status)
     
   def exists(self, key):
     url = self._makeurl(key)
@@ -263,25 +265,20 @@ class RestCacheClient(CacheClient):
     elif resp.status == NOT_FOUND:
       raise NotFoundError
     else:
-      raise CacheClientError("Unexpected HTTP Status: %s" % resp.status)
+      self._error("Unexpected HTTP Status: %s" % resp.status)
     
+MEMCACHED_LIFESPAN_MAX_SECONDS = 60*60*24*30
 #TODO
 class MemcachedCacheClient(CacheClient):
   """Memcached cache client implementation."""
     
   def __init__(self, config):
-    super(RestCacheClient, self).__init__(config["host"], config["port"], config["cache"])
+    super(MemcachedCacheClient, self).__init__(config["host"], config["port"], config["cache"])
     self.config = config
-    if self.cache_name == None or self.cache_name == "":
-      self.cache_name = "___defaultcache";
-    self.http_conn = HTTPConnection(self.host, self.port)
+    if self.cache_name != None and self.cache_name != "":
+      print "WARNING: memcached client doesn't support named caches. cache_name config value will be ignored and default cache will be used instead."
+    self.memcached_client = Client([self.host + ':' + self.port], debug=0)
     return
-  
-  def _makeurl(self, key):
-    suffix = ""
-    if (key != None):
-      suffix = "/" + key               
-    return self.config["rest.server_url"] + "/" + self.cache_name + suffix
   
   def put(self, key, value, version=None, lifespan=None, max_idle=None, put_if_absent=False):
     """key - key to store to
@@ -291,77 +288,76 @@ class MemcachedCacheClient(CacheClient):
        max_idle - number of seconds the entry is allowed to be inactive, if exceeded entry is deleted
        put_if_absent - if true, the put will be successful only if there is no previous entry under given key
     """
-    url = self._makeurl(key)
-    method = "PUT"
-    if (put_if_absent):
-      method = "POST" # doing POST instead of PUT will cause conflict in case the entry exists
-    headers =  {"Content-Type": self.config["rest.content_type"]}
+    time = 0
     if lifespan != None:
-      headers["timeToLiveSeconds"] = lifespan
+      if lifespan > MEMCACHED_LIFESPAN_MAX_SECONDS:
+        self._error("Memcached cache client supports lifespan values only up to %s seconds (30 days)." % MEMCACHED_LIFESPAN_MAX_SECONDS)
+      time = lifespan
     if max_idle != None:
-      headers["maxIdleTimeSeconds"] = max_idle
-    if version != None:
-      headers["If-Match"] = version
-    self.http_conn.request(method, url, value, headers)
-    resp = self.http_conn.getresponse()
-    if resp.status == OK:
-      return
-    elif resp.status == CONFLICT:
-      raise ConflictError
-    else:
-      raise CacheClientError("Unexpected HTTP Status: %s" % resp.status)
+      self._error("Memcached cache client doesn't support max idle time setting.")
+    try:
+      if (version == None):
+        if (put_if_absent):
+          retval = self.memcached_client.add(key, value, time, 0)
+          if retval != 0:
+            return
+          else:
+            raise ConflictError
+        else:
+          retval = self.memcached_client.set(key, value, time, 0)
+          if retval != 0:
+            return
+          else:
+            self._error("Operation unsuccessful.")
+      else:
+        self.memcached_client.cas_ids[key] = version
+        self.memcached_client.cas(key, value, time, 0)
+    except CacheClientError as e:
+      raise e #rethrow
+    except Exception as e:
+      self._error(e)
     
   def get(self, key, get_version=False):
-    url = self._makeurl(key)
-    headers =  {"Content-Type": self.config["rest.content_type"]}
-    
-    self.http_conn.request("GET", url, None, headers)
-    resp = self.http_conn.getresponse()
-    if resp.status == OK:
-      value = resp.read()
-      version = resp.getheader("ETag", None)
-      return (version, value) if get_version else value
-    elif resp.status == NOT_FOUND:
-      raise NotFoundError
-    else:
-      raise CacheClientError("Unexpected HTTP Status: %s" % resp.status)
+    try:
+      if get_version:
+        val = self.memcached_client.gets(key)
+        if val == None:
+          raise NotFoundError
+        version = self.memcached_client.cas_ids[key]
+        if version == None:
+          self._error("Couldn't obtain version from memcached server.")
+        return version, val
+      else:
+        val = self.memcached_client.get(key)
+        if val == None:
+          raise NotFoundError
+        return val 
+    except CacheClientError as e:
+      raise e #rethrow
+    except Exception as e:
+      self._error(e.args)
 
   def delete(self, key, version=None):
-    url = self._makeurl(key)
-    headers =  {}
-    if version != None:
-      headers["If-Match"] = version
-      
-    self.http_conn.request("DELETE", url, None, headers)
-    resp = self.http_conn.getresponse()
-    if resp.status == OK:
-      return
-    elif resp.status == NO_CONTENT:
-      raise NotFoundError
-    elif resp.status == CONFLICT:
-      raise ConflictError
-    else:
-      raise CacheClientError("Unexpected HTTP Status: %s" % resp.status)
+    try:
+      if version:
+        self._error("versioned delete operation not available for memcached client")
+      retval = self.memcached_client.delete(key, 0)
+      if (retval == 0):
+        self._error("Operation unsuccessful.")
+    except CacheClientError as e:
+      raise e #rethrow
+    except Exception as e:
+      self._error(e.args)
     
   def clear(self):
-    url = self._makeurl(None)
-      
-    self.http_conn.request("DELETE", url, None, {})
-    resp = self.http_conn.getresponse()
-    if resp.status == NO_CONTENT:
-      return
-    else:
-      raise CacheClientError("Unexpected HTTP Status: %s" % resp.status)
+    try:
+      retval = self.memcached_client.flush_all()
+      if (retval == 0):
+        self._error("Operation unsuccessful.")
+    except CacheClientError as e:
+      raise e #rethrow
+    except Exception as e:
+      self._error(e.args)
     
   def exists(self, key):
-    url = self._makeurl(key)
-    headers =  {"Content-Type": self.config["rest.content_type"]}
-    
-    self.http_conn.request("HEAD", url, None, headers)
-    resp = self.http_conn.getresponse()
-    if resp.status == OK:
-      return
-    elif resp.status == NOT_FOUND:
-      raise NotFoundError
-    else:
-      raise CacheClientError("Unexpected HTTP Status: %s" % resp.status)
+    self._error("exists operation not available for memcached client")
