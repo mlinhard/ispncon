@@ -4,5 +4,6 @@
 *.pyc
 build
 dist
+src/work
 ispncon.egg-info
 

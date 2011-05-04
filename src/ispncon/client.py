@@ -11,7 +11,8 @@ MemcachedCacheClient
 from infinispan.remotecache import RemoteCache, RemoteCacheError
 from httplib import HTTPConnection, CONFLICT, OK, NOT_FOUND, NO_CONTENT
 from memcache import Client
-import socket # because of MyMemcachedClient
+##from memcache import __ersion__ as memcache_version
+#import socket # because of MyMemcachedClient
 
 __author__ = "Michal Linhard"
 __copyright__ = "(C) 2011 Red Hat Inc."
@@ -275,41 +276,73 @@ MEMCACHED_LIFESPAN_MAX_SECONDS = 60*60*24*30
 # https://bugs.launchpad.net/python-memcached/+bug/684689
 # https://bugs.launchpad.net/python-memcached/+bug/684690
 # as soon as these are solved we can return to the original Client
-class MyMemcachedClient(Client):
-  def __init__(self, *args, **kw):
-    super(MyMemcachedClient, self).__init__(*args, **kw)
-    self.last_set_status = None
-    
-  def _set(self, cmd, key, val, time, min_compress_len = 0):
-    self.check_key(key)
-    server, key = self._get_server(key)
-    if not server:
-      return 0
-    
-    self._statlog(cmd)
-    
-    store_info = self._val_to_store_info(val, min_compress_len)
-    if not store_info: return(0)
-    
-    if cmd == 'cas':
-      if key not in self.cas_ids:
-        return self._set('set', key, val, time, min_compress_len)
-      fullcmd = "%s %s %d %d %d %d\r\n%s" % (
-          cmd, key, store_info[0], time, store_info[1],
-          self.cas_ids[key], store_info[2])
-    else:
-      fullcmd = "%s %s %d %d %d\r\n%s" % (
-          cmd, key, store_info[0], time, store_info[1], store_info[2])
-    
-    try:
-      server.send_cmd(fullcmd)
-      self.last_set_status = server.expect("STORED") 
-      return(self.last_set_status == "STORED")
-    except socket.error, msg:
-      if isinstance(msg, tuple): msg = msg[1]
-      server.mark_dead(msg)
-      self.last_set_status = "ERROR socket error"
-    return 0
+# so far to prevent mysterious bugs we'll require fixed memcache version 1.47
+
+# other possibility is that we'll document limitations of memcached client.
+
+#class MyMemcachedClient(Client):
+#  def __init__(self, *args, **kw):
+#    super(MyMemcachedClient, self).__init__(*args, **kw)
+#    if memcache_version != "1.47":
+#      raise CacheClientError("Unsupported python-memcached library version")
+#    self.last_set_status = None
+#    
+#  def _set(self, cmd, key, val, time, min_compress_len = 0):
+#    self.check_key(key)
+#    server, key = self._get_server(key)
+#    if not server:
+#      return 0
+#    
+#    self._statlog(cmd)
+#    
+#    store_info = self._val_to_store_info(val, min_compress_len)
+#    if not store_info: return(0)
+#    
+#    if cmd == 'cas':
+#      if key not in self.cas_ids:
+#        return self._set('set', key, val, time, min_compress_len)
+#      fullcmd = "%s %s %d %d %d %d\r\n%s" % (
+#          cmd, key, store_info[0], time, store_info[1],
+#          self.cas_ids[key], store_info[2])
+#    else:
+#      fullcmd = "%s %s %d %d %d\r\n%s" % (
+#          cmd, key, store_info[0], time, store_info[1], store_info[2])
+#    
+#    try:
+#      server.send_cmd(fullcmd)
+#      self.last_set_status = server.expect("STORED") 
+#      return(self.last_set_status == "STORED")
+#    except socket.error, msg:
+#      if isinstance(msg, tuple): msg = msg[1]
+#      server.mark_dead(msg)
+#      self.last_set_status = "ERROR socket error"
+#    return 0
+#  
+#  def delete(self, key, time=0):
+#    self.check_key(key)
+#    server, key = self._get_server(key)
+#    if not server:
+#        return 0
+#    self._statlog('delete')
+#    if time != None:
+#        cmd = "delete %s %d" % (key, time)
+#    else:
+#        cmd = "delete %s" % key
+#    
+#    try:
+#        server.send_cmd(cmd)
+#        line = server.readline()
+#        if line:
+#          self.last_set_status = line.strip() 
+#          if self.last_set_status in ['DELETED', 'NOT_FOUND']: return 1
+#        self.debuglog('Delete expected DELETED or NOT_FOUND, got: %s'
+#                % repr(line))
+#    except socket.error, msg:
+#        if isinstance(msg, tuple): msg = msg[1]
+#        server.mark_dead(msg)
+#        self.last_set_status = "ERROR socket error"
+#    return 0
+
 
 class MemcachedCacheClient(CacheClient):
   """Memcached cache client implementation."""
@@ -319,7 +352,7 @@ class MemcachedCacheClient(CacheClient):
     self.config = config
     if self.cache_name != None and self.cache_name != "":
       print "WARNING: memcached client doesn't support named caches. cache_name config value will be ignored and default cache will be used instead."
-    self.memcached_client = MyMemcachedClient([self.host + ':' + self.port], debug=0)
+    self.memcached_client = Client([self.host + ':' + self.port], debug=0)
     return
   
   def put(self, key, value, version=None, lifespan=None, max_idle=None, put_if_absent=False):
@@ -341,25 +374,29 @@ class MemcachedCacheClient(CacheClient):
       if (version == None):
         if (put_if_absent):
           if not self.memcached_client.add(key, value, time, 0):
-            if self.memcached_client.last_set_status == "NOT_STORED":
-              raise ConflictError
-            else:
-              self._error("Operation unsuccessful. " + self.memcached_client.last_set_status)
+          # current python-memcached doesn't recoginze these states
+          # if self.memcached_client.last_set_status == "NOT_STORED":
+          #   raise ConflictError
+          # else:
+          #   self._error("Operation unsuccessful. " + self.memcached_client.last_set_status)
+            self._error("Operation unsuccessful. Possibly CONFLICT.")
         else:
           if not self.memcached_client.set(key, value, time, 0):
-            self._error("Operation unsuccessful. " + self.memcached_client.last_set_status)
+          # self._error("Operation unsuccessful. " + self.memcached_client.last_set_status)
+            self._error("Operation unsuccessful.")
       else:
         try:
           self.memcached_client.cas_ids[key] = int(version)
         except ValueError:
           self._error("Please provide an integer version.")
         if not self.memcached_client.cas(key, value, time, 0):
-          if self.memcached_client.last_set_status == "EXISTS":
-            raise ConflictError
-          if self.memcached_client.last_set_status == "NOT_FOUND":
-            raise NotFoundError
-          else:
-            self._error("Operation unsuccessful. " + self.memcached_client.last_set_status)
+#         if self.memcached_client.last_set_status == "EXISTS":
+#           raise ConflictError
+#         if self.memcached_client.last_set_status == "NOT_FOUND":
+#           raise NotFoundError
+#         else:
+#           self._error("Operation unsuccessful. " + self.memcached_client.last_set_status)
+          self._error("Operation unsuccessful. Possibly EXISTS, NOT_FOUND.")
     except CacheClientError as e:
       raise e #rethrow
     except Exception as e:
@@ -389,9 +426,11 @@ class MemcachedCacheClient(CacheClient):
     try:
       if version:
         self._error("versioned delete operation not available for memcached client")
-      retval = self.memcached_client.delete(key, 0)
-      if (retval == 0):
-        self._error("Operation unsuccessful.")
+      if self.memcached_client.delete(key, 0):
+        if self.memcached_client.last_set_status == "NOT_FOUND":
+          raise NotFoundError
+      else:
+        self._error("Operation unsuccessful. " + self.memcached_client.last_set_status)
     except CacheClientError as e:
       raise e #rethrow
     except Exception as e:
@@ -399,9 +438,7 @@ class MemcachedCacheClient(CacheClient):
     
   def clear(self):
     try:
-      retval = self.memcached_client.flush_all()
-      if (retval == 0):
-        self._error("Operation unsuccessful.")
+      self.memcached_client.flush_all()
     except CacheClientError as e:
       raise e #rethrow
     except Exception as e:

@@ -216,6 +216,7 @@ class CommandExecutor:
     if (len(args) != 0):
       self._error("Clear command doesn't have any arguments.")
     self._get_client().clear()
+    print "DELETED"
 
   def _cmd_exists(self, args):
     _client = self._get_client()

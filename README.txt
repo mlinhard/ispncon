@@ -69,7 +69,12 @@ puts the specified entry (key, value) into the cache
     * if option -a was used and the entry already exists, or -v was used and versions don't match, one line: 
     CONFLICT
     
-
+    * NOTE: memcached client won't distinguish between states NOT_FOUND, CONFLICT and ERROR and always will 
+            return ERROR if operation wasn't successfull. this is a limitation of python-memcached client. 
+            see issues:
+            https://bugs.launchpad.net/python-memcached/+bug/684689
+            https://bugs.launchpad.net/python-memcached/+bug/684690
+            for discussion.
 get
 ===
 
