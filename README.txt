@@ -5,6 +5,18 @@ Infinispan Console is a linux console tool written in python capable of doing si
 the chosen client access (hotrod, memcached, rest/http). This might be handy for cache debugging/testing purposes and also provides
 a command line interface usable by linux shell scripts.
 
+installation
+------------
+
+requirements: python modules: infinispan, python-memcached
+
+git clone git@github.com:mlinhard/ispncon.git
+cd ispncon/src
+sudo python setup.py install
+#make this part of your .bashrc or whatever so you have ispncon command on path
+export ISPNCON_HOME=/path/to/ispncon
+export PATH=$ISPNCON_HOME/bin:$PATH
+
 usage
 -----
 
