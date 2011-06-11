@@ -107,7 +107,7 @@ class CommandExecutor:
      and doesn't put anything in that case"""
         
     try:
-      opts1, args1 = getopt.getopt(args, "i:v:l:I:a", ["input-filename=", "version=", "lifespan=", "maxidle=", "put-if-absent"])
+      opts1, args1 = getopt.getopt(args, "i:v:l:I:a", ["input-filename=", "version=", "lifespan=", "max-idle=", "put-if-absent"])
     except getopt.GetoptError:          
       self._error("Wrong put command syntax.")
     filename = None
@@ -126,7 +126,7 @@ class CommandExecutor:
               lifespan = int(arg)
             except ValueError:
               self._error("Converting lifespan. must be an integer.")
-        if opt in ("-I", "--maxidle"):
+        if opt in ("-I", "--max-idle"):
             try:
               maxidle = int(arg)
             except ValueError:
