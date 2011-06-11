@@ -7,7 +7,7 @@ Constant definition
 __author__ = "Michal Linhard"
 __copyright__ = "(C) 2011 Red Hat Inc."
 
-ISPNCON_VERSION = "0.8.0"
+ISPNCON_VERSION = "0.8.1-SNAPSHOT"
 
 USAGE = """USAGE: ispncon [options] <operation> [operation_options] <op_arguments>")
     -c --client         client to use (default: hotrod, other possible values memcached, rest)")

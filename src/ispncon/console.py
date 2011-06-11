@@ -292,7 +292,7 @@ class CommandExecutor:
  
 def main(args):
   try:
-    opts, args = getopt.getopt(sys.argv[1:], "c:h:p:C:v:e", ["client=", "host=", "port=", "cache-name=", "version", "exit-on-error"])
+    opts, args = getopt.getopt(sys.argv[1:], "c:h:p:C:ve", ["client=", "host=", "port=", "cache-name=", "version", "exit-on-error"])
   except getopt.GetoptError:          
     print USAGE              
     sys.exit(2)     

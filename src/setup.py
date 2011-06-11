@@ -1,11 +1,10 @@
 #!/usr/bin/env python
 
 from setuptools import setup
-
-version = "0.8.0b1"
+from ispncon import ISPNCON_VERSION
 
 setup(name = 'ispncon',
-      version = version,
+      version = ISPNCON_VERSION,
       description = 'Infinispan Console',
       author = 'Michal Linhard',
       author_email = 'michal@linhard.sk',
