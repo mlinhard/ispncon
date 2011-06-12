@@ -46,8 +46,6 @@ class Config(dict):
     # override with whatever is in ~/.ispncon file
     self._override_with_user_config()
     
-  
-    
   def __str__(self):
     str = ""
     for  key in KNOWN_CONFIG_KEYS:
@@ -62,9 +60,26 @@ class Config(dict):
   def _error(self, msg):
     raise CommandExecutionError(msg)
   
+  def _parse_section_key(self, section_key):
+    v = section_key.split(".")
+    if len(v) == 1:
+      return "ispncon", v[0]
+    elif len(v) == 2:
+      return v[0], v[1]
+    else:
+      self._error("Invalid key format. Must be <section>.<key>")
+
   def save(self):
-    #TODO
-    self._error("Saving of configuration is not yet supported!")
+    f = open(os.path.expanduser("~/.ispncon"), "w")
+    cfgp = ConfigParser.ConfigParser(allow_no_value=True)
+
+    for section_key in self.iterkeys():
+      section, key = self._parse_section_key(section_key)
+      if not cfgp.has_section(section):
+        cfgp.add_section(section)
+      cfgp.set(section, key, self[section_key])
+
+    cfgp.write(f)
 
 class CommandExecutionError(Exception):
   def __init__(self, msg, exit_code=1):
@@ -242,6 +257,8 @@ class CommandExecutor:
         self._error("Wrong config command syntax.")
       else:
         self.config.save()
+        print "STORED"
+        return
     if (len(args) > 2):
       self._error("Wrong config command syntax.")
 
