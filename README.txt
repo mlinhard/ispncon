@@ -24,3 +24,5 @@ put parameter changed from --maxidle to --max-idle
 fixed USAGE output
 README.txt contains just basic info and points to wiki documentation
 added version history
+exists operation will be implemented by get operation in memcached
+added version operation

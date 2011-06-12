@@ -184,7 +184,13 @@ class CommandExecutor:
         outfile.close()
       except IOError:
         raise CacheClientError("writing file %s" % output_filename)
-      
+
+  def _cmd_version(self, args):
+    _client = self._get_client()
+    if (len(args) != 1):
+      self._error("You must supply key.")
+    print _client.version(args[0])
+
   def _cmd_delete(self, args):
     _client = self._get_client()
     try:
@@ -202,7 +208,7 @@ class CommandExecutor:
     _client.delete(args1[0], version)
     print "DELETED"
     
-  
+
   def _cmd_help(self, args):
     if (len(args) == 0):
       print "Supported operatiotype: <class 'ispncon.console.Config'>ns: \n", "\n".join(sorted(["%s\t\t%s" % (x, HELP[x].split("\n")[0]) for x in HELP.keys()]))
@@ -263,6 +269,8 @@ class CommandExecutor:
         self._cmd_put(args)
       elif cmd == "get":
         self._cmd_get(args)
+      elif cmd == "version":
+        self._cmd_version(args)
       elif cmd == "delete":
         self._cmd_delete(args)
       elif cmd == "include":

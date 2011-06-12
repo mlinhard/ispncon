@@ -50,15 +50,41 @@ HELP = {
     -V             gets version of the data
     
   return:
-    * in case no filename was specified
-    <data...
-    ... possibly on multiple lines
-    ... possibly binary content, not suitable for terminal>
-    * in case a filename was specified
-    no output
-    * in case -V was specified, the output is prepended with one line
-    VERSION <version>""",
-    
+    (exit code 0)
+    * entry was found in the cache
+    output:
+      * in case no filename was specified
+      <data...
+      ... possibly on multiple lines
+      ... possibly binary content, not suitable for terminal>
+      * in case a filename was specified
+      no output
+      * in case -V was specified, the output is prepended with one line
+      VERSION <version>
+
+    (exit code 1)
+    * in case of general error, one line:
+    ERROR <msg>
+
+    (exit code 2)
+    * if the entry wasn't found in the cache, one line:
+    NOT_FOUND""",
+  "version" : """get the version of the entry with the specified key
+  format:
+    version <key>
+
+  return:
+    (exit code 0)
+    * entry was found, one line:
+    <version>
+
+    (exit code 1)
+    * in case of general error, one line:
+    ERROR <msg>
+
+    (exit code 2)
+    * if the entry wasn't found in the cache, one line:
+    NOT_FOUND""",
   "help" : """prints help about an operation
   
   format:

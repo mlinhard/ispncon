@@ -38,15 +38,51 @@ class CacheClient(object):
     self.port = port
     self.cache_name = cache_name
   def put(self, key, value, version=None, lifespan=None, maxidle=None, put_if_absent=False):
+    """Put data under the given key
+       key - key to store to
+       value - value to store, this can be either string or byte array (result of file.read())
+       version - store only if version in cache is equal to given version, takes priority above put_if_absent
+       lifespan - number of seconds to live
+       max_idle - number of seconds the entry is allowed to be inactive, if exceeded entry is deleted
+       put_if_absent - if true, the put will be successful only if there is no previous entry under given key
+    """
     pass
-  def get(self, key):
+  def get(self, key, get_version=False):
+    """Get entry under the given key
+      key - key
+      get_version - get version flag
+      returns (version, data) if get_version otherwise returns just data
+    """
     pass
+  def version(self, key):
+    """Get version of entry with the given key
+      key - key of the entry to get
+      returns version string (format depends on the client type)
+    """
+    # default inefficient implementation
+    return self.get(key, True)[0]
+
   def exists(self, key):
-    pass
+    """Raise NotFoundError if entry under the given key doesn't exist, otherwise do nothing.
+      key - key
+      returns nothing
+    """
+    # default inefficient implementation
+    self.get(key) #this throws NotFoundError if not found
+
   def delete(self, key):
+    """Delete the entry under the given key
+      key - key
+      returns nothing
+    """
     pass
+
   def clear(self):
+    """Clears the whole cache
+      returns nothing
+    """
     pass
+
   def _error(self, msg):
     raise CacheClientError(msg)
   
@@ -74,13 +110,6 @@ class HotRodCacheClient(CacheClient):
     return
   
   def put(self, key, value, version=None, lifespan=None, max_idle=None, put_if_absent=False):
-    """key - key to store to
-       value - value to store
-       version - store only if version in cache is equal to given version, takes priority above put_if_absent
-       lifespan - number of seconds to live
-       max_idle - number of seconds the entry is allowed to be inactive, if exceeded entry is deleted
-       put_if_absent - if true, the put will be successful only if there is no previous entry under given key
-    """
     if lifespan == None:
       lifespan=0 
     if max_idle == None:
@@ -167,8 +196,6 @@ class HotRodCacheClient(CacheClient):
     except RemoteCacheError as e:
       self._error(e.args) 
 
-REST_SERVER_URL = "/infinispan-server-rest/rest"
-    
 class RestCacheClient(CacheClient):
   """REST cache client implementation."""
     
@@ -187,13 +214,6 @@ class RestCacheClient(CacheClient):
     return self.config["rest.server_url"] + "/" + self.cache_name + suffix
   
   def put(self, key, value, version=None, lifespan=None, max_idle=None, put_if_absent=False):
-    """key - key to store to
-       value - value to store
-       version - store only if version in cache is equal to given version, takes priority above put_if_absent
-       lifespan - number of seconds to live
-       max_idle - number of seconds the entry is allowed to be inactive, if exceeded entry is deleted
-       put_if_absent - if true, the put will be successful only if there is no previous entry under given key
-    """
     url = self._makeurl(key)
     method = "PUT"
     if (put_if_absent):
@@ -264,6 +284,22 @@ class RestCacheClient(CacheClient):
     resp = self.http_conn.getresponse()
     if resp.status == OK:
       return
+    elif resp.status == NOT_FOUND:
+      raise NotFoundError
+    else:
+      self._error("Unexpected HTTP Status: %s" % resp.status)
+
+  def version(self, key):
+    url = self._makeurl(key)
+    headers =  {"Content-Type": self.config["rest.content_type"]}
+
+    self.http_conn.request("HEAD", url, None, headers)
+    resp = self.http_conn.getresponse()
+    if resp.status == OK:
+      version = resp.getheader("ETag", None)
+      if (version == None):
+        self._error("Couldn't obtain version info from the REST server")
+      return version
     elif resp.status == NOT_FOUND:
       raise NotFoundError
     else:
@@ -356,13 +392,6 @@ class MemcachedCacheClient(CacheClient):
     return
   
   def put(self, key, value, version=None, lifespan=None, max_idle=None, put_if_absent=False):
-    """key - key to store to
-       value - value to store
-       version - store only if version in cache is equal to given version, takes priority above put_if_absent
-       lifespan - number of seconds to live
-       max_idle - number of seconds the entry is allowed to be inactive, if exceeded entry is deleted
-       put_if_absent - if true, the put will be successful only if there is no previous entry under given key
-    """
     time = 0
     if lifespan != None:
       if lifespan > MEMCACHED_LIFESPAN_MAX_SECONDS:
@@ -396,7 +425,7 @@ class MemcachedCacheClient(CacheClient):
 #           raise NotFoundError
 #         else:
 #           self._error("Operation unsuccessful. " + self.memcached_client.last_set_status)
-          self._error("Operation unsuccessful. Possibly EXISTS, NOT_FOUND.")
+          self._error("Operation unsuccessful. Possibly CONFLICT, NOT_FOUND.")
     except CacheClientError as e:
       raise e #rethrow
     except Exception as e:
@@ -410,7 +439,7 @@ class MemcachedCacheClient(CacheClient):
           raise NotFoundError
         version = self.memcached_client.cas_ids[key]
         if version == None:
-          self._error("Couldn't obtain version from memcached server.")
+          self._error("Couldn't obtain version info from memcached server.")
         return version, val
       else:
         val = self.memcached_client.get(key)
@@ -443,6 +472,3 @@ class MemcachedCacheClient(CacheClient):
       raise e #rethrow
     except Exception as e:
       self._error(e.args)
-    
-  def exists(self, key):
-    self._error("exists operation not available for memcached client")
