@@ -26,3 +26,4 @@ README.txt contains just basic info and points to wiki documentation
 added version history
 exists operation will be implemented by get operation in memcached
 added version operation
+"config save" works

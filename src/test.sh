@@ -44,10 +44,21 @@ assertEquals "a" $ret
 
 }
 
+test_basic_put_get_return_codes() {
+test_case_begin "test_basic_put_get_return_codes"
+
+$CMD put a a > /dev/null
+assertEquals "0" $?
+$CMD get a > /dev/null
+assertEquals "0" $?
+
+}
+
 test_versioned_put() {
 test_case_begin "test_versioned_put"
 
-$CMD put a_versioned a
+ret=`$CMD put a_versioned a`
+assertEquals "STORED" $ret
 a_version=`$CMD version a_versioned`
 wrong_version=`expr $a_version + 1`
 ret=`$CMD put -v $wrong_version a_versioned b` # put with wrong version
@@ -58,6 +69,20 @@ ret=`$CMD put -v $a_version a_versioned b` # put with right version
 assertEquals "STORED" $ret
 ret=`$CMD get a_versioned`
 assertEquals "b" $ret # value should be changed
+
+}
+
+test_versioned_put_return_codes() {
+test_case_begin "test_versioned_put_return_codes"
+
+$CMD put a_versioned a > /dev/null
+assertEquals "0" $?
+a_version=`$CMD version a_versioned`
+wrong_version=`expr $a_version + 1`
+$CMD put -v $wrong_version a_versioned b > /dev/null # put with wrong version
+assertEquals "3" $?
+$CMD put -v $a_version a_versioned b > /dev/null # put with right version
+assertEquals "0" $?
 
 }
 
@@ -203,6 +228,7 @@ startserver memcached
 echo -e $CONFIG_MEMCACHED > ~/.ispncon
 
 test_basic_put_get
+test_basic_put_get_return_codes
 test_put_get_file
 
 stopserver
@@ -212,8 +238,10 @@ startserver hotrod
 echo -e $CONFIG_HOTROD > ~/.ispncon
 
 test_basic_put_get
+test_basic_put_get_return_codes
 test_put_get_file
 test_versioned_put
+test_versioned_put_return_codes
 
 stopserver
 
@@ -222,6 +250,7 @@ startserver rest
 echo -e $CONFIG_REST > ~/.ispncon
 
 test_basic_put_get
+test_basic_put_get_return_codes
 test_put_get_file
 
 stopserver
