@@ -11,6 +11,7 @@ MemcachedCacheClient
 from infinispan.remotecache import RemoteCache, RemoteCacheError
 from httplib import HTTPConnection, CONFLICT, OK, NOT_FOUND, NO_CONTENT
 from memcache import Client
+from ispncon import DEFAULT_CACHE_NAME
 ##from memcache import __ersion__ as memcache_version
 #import socket # because of MyMemcachedClient
 
@@ -104,7 +105,7 @@ class HotRodCacheClient(CacheClient):
   def __init__(self, config):
     super(HotRodCacheClient, self).__init__(config["host"], config["port"], config["cache"])
     self.config = config
-    if self.cache_name == None:
+    if self.cache_name == DEFAULT_CACHE_NAME: 
       self.cache_name = "";
     self.remote_cache = RemoteCache(self.host, int(self.port), self.cache_name)
     return
@@ -202,8 +203,6 @@ class RestCacheClient(CacheClient):
   def __init__(self, config):
     super(RestCacheClient, self).__init__(config["host"], config["port"], config["cache"])
     self.config = config
-    if self.cache_name == None or self.cache_name == "":
-      self.cache_name = "___defaultcache";
     self.http_conn = HTTPConnection(self.host, self.port)
     return
   
@@ -386,7 +385,7 @@ class MemcachedCacheClient(CacheClient):
   def __init__(self, config):
     super(MemcachedCacheClient, self).__init__(config["host"], config["port"], config["cache"])
     self.config = config
-    if self.cache_name != None and self.cache_name != "":
+    if self.cache_name != DEFAULT_CACHE_NAME:
       print "WARNING: memcached client doesn't support named caches. cache_name config value will be ignored and default cache will be used instead."
     self.memcached_client = Client([self.host + ':' + self.port], debug=0)
     return

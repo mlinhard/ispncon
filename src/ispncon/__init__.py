@@ -185,3 +185,6 @@ HELP = {
     exit code = exit code of the last command in the file."""
                     
 }
+
+DEFAULT_CACHE_NAME = "___defaultcache"
+

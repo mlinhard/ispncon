@@ -4,7 +4,7 @@
 """
 Command parsing and execution
 """
-from ispncon import ISPNCON_VERSION, HELP, USAGE
+from ispncon import ISPNCON_VERSION, HELP, USAGE, DEFAULT_CACHE_NAME
 from ispncon.client import fromString, CacheClientError, ConflictError, \
   NotFoundError
 import getopt
@@ -24,7 +24,7 @@ class Config(dict):
     user_cfg_file = os.path.expanduser("~/.ispncon")
     if not os.path.exists(user_cfg_file):
       return
-    cfgp = ConfigParser.ConfigParser(allow_no_value=True)
+    cfgp = ConfigParser.ConfigParser()
     cfgp.read(user_cfg_file)
     for key, value in cfgp.items(MAIN_CONFIG_SECTION):
       self[key]=value
@@ -39,7 +39,7 @@ class Config(dict):
     self["client_type"] = "hotrod"
     self["host"] = "localhost"
     self["port"] = "11222"
-    self["cache"] = None
+    self["cache"] = DEFAULT_CACHE_NAME
     self["exit_on_error"] = False
     self["rest.server_url"] = "/infinispan-server-rest/rest"
     self["rest.content_type"] = "text/plain"
@@ -71,7 +71,7 @@ class Config(dict):
 
   def save(self):
     f = open(os.path.expanduser("~/.ispncon"), "w")
-    cfgp = ConfigParser.ConfigParser(allow_no_value=True)
+    cfgp = ConfigParser.ConfigParser()
 
     for section_key in self.iterkeys():
       section, key = self._parse_section_key(section_key)
