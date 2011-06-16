@@ -10,12 +10,13 @@ __copyright__ = "(C) 2011 Red Hat Inc."
 ISPNCON_VERSION = "0.8.1-SNAPSHOT"
 
 USAGE = """USAGE: ispncon [options] <operation> [operation_options] <op_arguments>
-    -c --client            client to use, possible values hotrod(default), memcached, rest
-    -h --host <host>       hostname/ip address to connect to. Default: localhost
-    -p --port <port>       port to connect to. Default:  11222 (hotrod default port)
-    -C --cache-name <name> Named cache to use. Default: use default cache (no value)
-    -v --version           prints the ispncon version and exits
-    -e --exit-on-error     if operation fails, don't print ERROR output, but fail with error exit code
+    -c --client                 client to use, possible values hotrod(default), memcached, rest
+    -h --host <host>            hostname/ip address to connect to. Default: localhost
+    -p --port <port>            port to connect to. Default:  11222 (hotrod default port)
+    -C --cache-name <name>      Named cache to use. Default: use default cache (no value)
+    -v --version                prints the ispncon version and exits
+    -e --exit-on-error          if operation fails, don't print ERROR output, but fail with error exit code
+    -P --config "<key> <value>" set configuration key to given value
     use operation help to get list of supported operations
     or help <operation> to display info on particular operation"""
 

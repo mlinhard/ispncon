@@ -317,7 +317,7 @@ class CommandExecutor:
  
 def main(args):
   try:
-    opts, args = getopt.getopt(sys.argv[1:], "c:h:p:C:ve", ["client=", "host=", "port=", "cache-name=", "version", "exit-on-error"])
+    opts, args = getopt.getopt(sys.argv[1:], "c:h:p:C:veP:", ["client=", "host=", "port=", "cache-name=", "version", "exit-on-error", "config="])
   except getopt.GetoptError:          
     print USAGE              
     sys.exit(2)     
@@ -337,6 +337,17 @@ def main(args):
       sys.exit(0)
     if opt in ("-e", "--exit-on-error"):
       config["exit_on_error"] = True
+    if opt in ("-P", "--config"):
+      params = arg.split(" ")
+      if (len(params) != 2):
+        print ISPNCON_VERSION
+        sys.exit(0)
+      try:
+        config[params[0]] = params[1]
+      except CommandExecutionError as e:
+        print e.msg
+        sys.exit(1)
+
   executor = CommandExecutor(config)
   isatty = sys.stdin.isatty()
   prompt = "> " if isatty else ""
