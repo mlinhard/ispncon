@@ -5,19 +5,20 @@
 Command parsing and execution
 """
 from ispncon import ISPNCON_VERSION, HELP, USAGE, DEFAULT_CACHE_NAME
-from ispncon.client import fromString, CacheClientError, ConflictError, \
-  NotFoundError
+from ispncon.client import CacheClientError, ConflictError, NotFoundError
+from ispncon.codec import CODEC_NONE, CodecError
+import ConfigParser
 import getopt
+import ispncon
+import os
 import shlex
 import sys
-import ConfigParser
-import os
 
 __author__ = "Michal Linhard"
 __copyright__ = "(C) 2011 Red Hat Inc."
 
 MAIN_CONFIG_SECTION = "ispncon"
-KNOWN_CONFIG_KEYS = ["client_type", "host", "port", "cache", "exit_on_error", "rest.server_url", "rest.content_type"]
+KNOWN_CONFIG_KEYS = ["client_type", "host", "port", "cache", "exit_on_error", "default_codec", "rest.server_url", "rest.content_type", "hotrod.use_river_string_keys"]
 
 class Config(dict):
   def _override_with_user_config(self):
@@ -41,8 +42,10 @@ class Config(dict):
     self["port"] = "11222"
     self["cache"] = DEFAULT_CACHE_NAME
     self["exit_on_error"] = False
+    self["default_codec"] = CODEC_NONE
     self["rest.server_url"] = "/infinispan-server-rest/rest"
     self["rest.content_type"] = "text/plain"
+    self["hotrod.use_river_string_keys"] = True
     # override with whatever is in ~/.ispncon file
     self._override_with_user_config()
     
@@ -90,19 +93,46 @@ class CommandExecutor:
   def __init__(self, config):
     self.config = config
     self.exit_on_error = self.config["exit_on_error"]
+    self.default_codec = ispncon.codec.fromString(self.config["default_codec"])
     self.client = None
     
   # get the client lazily
   def _get_client(self):
     if self.client == None:
       try:
-        self.client = fromString(self.config)
+        self.client = ispncon.client.fromString(self.config)
       except CacheClientError as e:
         raise e
       except Exception as e:
         self._error("creating client: %s" % str(e.args))
     return self.client
       
+  def _optionally_encode(self, codec, value):
+    if (codec == None):
+      if (self.default_codec == None):
+        return value
+      else:
+        return self.default_codec.encode(value)
+    else:
+      currentCodec = ispncon.codec.fromString(codec)
+      if currentCodec == None:
+        return value
+      else:
+        return currentCodec.encode(value)
+
+  def _optionally_decode(self, codec, value):
+    if (codec == None):
+      if (self.default_codec == None):
+        return value
+      else:
+        return self.default_codec.decode(value)
+    else:
+      currentCodec = ispncon.codec.fromString(codec)
+      if currentCodec == None:
+        return value
+      else:
+        return currentCodec.decode(value)
+
   def _cmd_include(self, args):
     if (len(args) != 1):
       self._error("Wrong include command syntax.")
@@ -122,7 +152,7 @@ class CommandExecutor:
      and doesn't put anything in that case"""
         
     try:
-      opts1, args1 = getopt.getopt(args, "i:v:l:I:a", ["input-filename=", "version=", "lifespan=", "max-idle=", "put-if-absent"])
+      opts1, args1 = getopt.getopt(args, "i:v:l:I:ae:", ["input-filename=", "version=", "lifespan=", "max-idle=", "put-if-absent", "encode="])
     except getopt.GetoptError:          
       self._error("Wrong put command syntax.")
     filename = None
@@ -131,6 +161,7 @@ class CommandExecutor:
     maxidle = None
     put_if_absent = False
     value = None
+    codec = None
     for opt, arg in opts1:
         if opt in ("-i", "--input-filename"):
             filename = arg
@@ -148,6 +179,8 @@ class CommandExecutor:
               self._error("converting lifespan. must be an integer.")
         if opt in ("-a", "--put-if-absent"):
             put_if_absent = True
+        if opt in ("-e", "--encode"):
+            codec = arg
     if filename == None:
       if (len(args1) < 2):
         self._error("You must supply key and either value or input filename.")
@@ -164,17 +197,22 @@ class CommandExecutor:
       finally:
         if (f != None):
           f.close()
-    self._get_client().put(args1[0], value, version, lifespan, maxidle, put_if_absent)
+    try:
+      encoded_value = self._optionally_encode(codec, value)
+    except CodecError as e:
+      self._error(e.args[0]);
+    self._get_client().put(args1[0], encoded_value, version, lifespan, maxidle, put_if_absent)
     print "STORED"
       
   def _cmd_get(self, args):
     _client = self._get_client()
     try:
-      opts1, args1 = getopt.getopt(args, "o:v", ["output-filename=", "version"])
+      opts1, args1 = getopt.getopt(args, "o:vd:", ["output-filename=", "version", "decode="])
     except getopt.GetoptError:          
       self._error("Wrong get command syntax.")
     output_filename = None
     get_version = False
+    codec = None
     if (len(args1) != 1):
       self._error("You must supply key.")
     for opt, arg in opts1:
@@ -182,6 +220,8 @@ class CommandExecutor:
             output_filename = arg
         if opt in ("-v", "--version"):
             get_version = True
+        if opt in ("-d", "--decode"):
+            codec = arg
     version = None
     value = None
     if get_version:
@@ -190,15 +230,19 @@ class CommandExecutor:
     else:
       value = _client.get(args1[0], False)
 
+    try:
+      decoded_value = self._optionally_decode(codec, value)
+    except CodecError as e:
+      self._error(e.args[0]);
     if output_filename == None:
-      print value
+      print decoded_value
     else:
       try:
         outfile = open(output_filename, "w")
-        outfile.write(value)
+        outfile.write(decoded_value)
         outfile.close()
       except IOError:
-        raise CacheClientError("writing file %s" % output_filename)
+        self._error("writing file %s" % output_filename)
 
   def _cmd_version(self, args):
     _client = self._get_client()

@@ -8,10 +8,11 @@ HotRodCacheClient
 RestCacheClient
 MemcachedCacheClient
 """
-from infinispan.remotecache import RemoteCache, RemoteCacheError
 from httplib import HTTPConnection, CONFLICT, OK, NOT_FOUND, NO_CONTENT
-from memcache import Client
+from infinispan.remotecache import RemoteCache, RemoteCacheError
 from ispncon import DEFAULT_CACHE_NAME
+from ispncon.codec import RiverStringCodec
+from memcache import Client
 ##from memcache import __ersion__ as memcache_version
 #import socket # because of MyMemcachedClient
 
@@ -105,12 +106,23 @@ class HotRodCacheClient(CacheClient):
   def __init__(self, config):
     super(HotRodCacheClient, self).__init__(config["host"], config["port"], config["cache"])
     self.config = config
+    if config["hotrod.use_river_string_keys"]:
+      self.river_keys = RiverStringCodec()
+    else:
+      self.river_keys = None
     if self.cache_name == DEFAULT_CACHE_NAME: 
       self.cache_name = "";
     self.remote_cache = RemoteCache(self.host, int(self.port), self.cache_name)
     return
-  
+
+  def _optionally_encode_key(self, key_unmarshalled):
+      if self.river_keys == None:
+        return key_unmarshalled;
+      else:
+        return self.river_keys.encode(key_unmarshalled)
+
   def put(self, key, value, version=None, lifespan=None, max_idle=None, put_if_absent=False):
+    key = self._optionally_encode_key(key)
     if lifespan == None:
       lifespan=0 
     if max_idle == None:
@@ -147,6 +159,7 @@ class HotRodCacheClient(CacheClient):
     try:
       value = None
       version = None
+      key = self._optionally_encode_key(key)
       if get_version:
         version, value = self.remote_cache.get_versioned(key)
       else:
@@ -162,6 +175,7 @@ class HotRodCacheClient(CacheClient):
 
   def delete(self, key, version=None):
     try:
+      key = self._optionally_encode_key(key)
       if version == None:
         retval = self.remote_cache.remove(key)
         if retval:
@@ -192,6 +206,7 @@ class HotRodCacheClient(CacheClient):
     
   def exists(self, key):
     try:
+      key = self._optionally_encode_key(key)
       if not self.remote_cache.contains_key(key):
         raise NotFoundError
     except RemoteCacheError as e:
