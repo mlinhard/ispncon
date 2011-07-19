@@ -29,3 +29,4 @@ added version operation
 "config save" works
 issue_1: fix ConfigParser problem under python 2.6
 issue_11: add -P --config "<key> <value>" command-line option
+issue_7: hotrod client compatibility with java hotrod client
