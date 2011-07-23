@@ -10,7 +10,7 @@ MemcachedCacheClient
 """
 from httplib import HTTPConnection, CONFLICT, OK, NOT_FOUND, NO_CONTENT
 from infinispan.remotecache import RemoteCache, RemoteCacheError
-from ispncon import DEFAULT_CACHE_NAME
+from ispncon import DEFAULT_CACHE_NAME, TRUE_STR_VALUES
 from ispncon.codec import RiverStringCodec
 from memcache import Client
 ##from memcache import __ersion__ as memcache_version
@@ -106,7 +106,7 @@ class HotRodCacheClient(CacheClient):
   def __init__(self, config):
     super(HotRodCacheClient, self).__init__(config["host"], config["port"], config["cache"])
     self.config = config
-    if config["hotrod.use_river_string_keys"]:
+    if config["hotrod.use_river_string_keys"] in TRUE_STR_VALUES:
       self.river_keys = RiverStringCodec()
     else:
       self.river_keys = None

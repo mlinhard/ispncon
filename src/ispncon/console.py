@@ -4,7 +4,8 @@
 """
 Command parsing and execution
 """
-from ispncon import ISPNCON_VERSION, HELP, USAGE, DEFAULT_CACHE_NAME
+from ispncon import ISPNCON_VERSION, HELP, USAGE, DEFAULT_CACHE_NAME,\
+  TRUE_STR_VALUES
 from ispncon.client import CacheClientError, ConflictError, NotFoundError
 from ispncon.codec import CODEC_NONE, CodecError
 import ConfigParser
@@ -41,11 +42,11 @@ class Config(dict):
     self["host"] = "localhost"
     self["port"] = "11222"
     self["cache"] = DEFAULT_CACHE_NAME
-    self["exit_on_error"] = False
+    self["exit_on_error"] = "False"
     self["default_codec"] = CODEC_NONE
     self["rest.server_url"] = "/infinispan-server-rest/rest"
     self["rest.content_type"] = "text/plain"
-    self["hotrod.use_river_string_keys"] = True
+    self["hotrod.use_river_string_keys"] = "True"
     # override with whatever is in ~/.ispncon file
     self._override_with_user_config()
     
@@ -92,7 +93,7 @@ class CommandExecutionError(Exception):
 class CommandExecutor:
   def __init__(self, config):
     self.config = config
-    self.exit_on_error = self.config["exit_on_error"]
+    self.exit_on_error = (self.config["exit_on_error"] in TRUE_STR_VALUES)
     self.default_codec = ispncon.codec.fromString(self.config["default_codec"])
     self.client = None
     
@@ -380,7 +381,7 @@ def main(args):
       print ISPNCON_VERSION
       sys.exit(0)
     if opt in ("-e", "--exit-on-error"):
-      config["exit_on_error"] = True
+      config["exit_on_error"] = "True"
     if opt in ("-P", "--config"):
       params = arg.split(" ")
       if (len(params) != 2):
