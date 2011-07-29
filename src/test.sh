@@ -2,15 +2,16 @@
 #################################### configuration #################################
 
 #these are variables to change in your local environment:
-#ISPN_HOME=/home/mlinhard/dev/projects/ispncon/test/infinispan-5.0.0.CR4
-#not using 5.0.0.CR4 due to https://issues.jboss.org/browse/ISPN-1176
 
-ISPN_HOME=/home/mlinhard/dev/projects/ispncon/test/infinispan-4.2.1.FINAL
-JBOSS_HOME=/home/mlinhard/dev/projects/ispncon/test/jboss-7.0.0.Beta3
+# Infinispan 5.0.0.CR8
+ISPN_HOME=/home/mlinhard/dev/projects/ispncon/test/infinispan-5.0.0.CR8
+# JBoss AS 7.0.0.Final
+JBOSS_HOME=/home/mlinhard/dev/projects/ispncon/test/as7
 
 # you can obtain the Infinispan and JBoss AS distributions here:
 # http://www.jboss.org/jbossas/downloads
 # http://sourceforge.net/projects/infinispan/files/infinispan
+# WARNING: the tests might modify files inside the given distribution directories
 
 TESTHOST=localhost
 
@@ -120,9 +121,8 @@ startserver() {
       sleep 2
       echo "server started"
    elif [ $SERVER_TYPE == "rest" ]; then
-      if [ $TESTHOST != "localhost" ]; then
-      	echo "WARNING: JBossAS7 must be manually setup to bind to $TESTHOST"
-      fi
+      configFile=$JBOSS_HOME/standalone/configuration/standalone.xml
+      sed "s/<inet-address value=\"[^\"]\+\"\/>/<inet-address value=\"${TESTHOST}\"\/>/" -i $configFile
       LOG_FILE=$WORKDIR/jbosslog.txt
       $JBOSS_HOME/bin/standalone.sh &> $LOG_FILE &
       SERVER_SHELL_PID=$!
