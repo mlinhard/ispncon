@@ -1,0 +1,183 @@
+ispncon Roadmap
+---------------
+
+0.8.2
+-----
+  - server management
+  - fix issue 10
+  - improve testsuite
+
+0.9.0
+-----
+  - remove "include" command (issue 8), add "batch" command with slightly different behaviour
+
+FUTURE TODO:
+
+  - test on Windows
+  - test on MacOS
+  - test on python 3 (make it work with python 3)
+  - create control scripts for Windows and MacOS
+
+
+Server management proposal
+--------------------------
+
+This proposal is about adding server management into ispncon.
+The cache servers will be managed by external control scripts that will adhere to a specified 
+interface (ispncon project will provide default implementation in bin/server_manager.sh). 
+In the first phase the scripts will be linux bash scripts only. No windows .bat files will be provided.
+
+This script will have following usage:
+
+   ispncon server [options] [<command>] [<name>]
+
+   <command>  start - start the server
+              log - see the server's log (tail)
+              out - see the server's stdout/stderr (tail)
+              stop - stop the server
+
+              if no command is specified list of all configured servers will be printed
+
+   <name>     name of the server this command is for
+              valid characters in server name are _ [a-z] [A-Z] [0-9]
+
+              if not specified, default will be used. see server_management.default_server config key
+
+   options:
+       -h <host>    host to bind to, see server:<name>.host config key
+       -p <port>    port to bind to, see server:<name>.port config key
+       -d <port>    turn on remote debugging on given port see: server:<name>.debug* config keys
+       -D <port>    turn on remote debugging with suspend on given port see: server:<name>.debug* config keys
+       -k           when stopping the server, kill the server, don't wait for graceful shutdown
+
+
+Server instance configuration
+-----------------------------
+
+There will be a new config section called "server_management"
+and for each server name there will be a section server:<name>
+
+   [server_management]
+
+   default_server = <name> -default server to use, this will let us omit the server name in server commands
+
+   default_host = <name>   -default server to use, this will let us omit the server name in server commands
+
+   [server:<name>]
+
+   script = <dir>         - path to the server management script, this is mandatory, if this is not specified
+                            server configuration is not considered to be valid
+                            special value BUILT-IN is accepted, in that case built-in script server_manager.sh
+                            will be used. 
+                            (this only works if ispncon_home config key is properly set, but it should be true 
+                            for most systems.)
+
+   host = <host>          - host/ip_addr the instance will be bound to
+
+   port = <port>          - port the instance will be bound to
+
+   home = <path>          - path to server's home directory
+                          - you should give different servers different home directories so that they can
+                            possibly run in parallel and not interfere with each other
+                          - it's upon the script whether it considers one of the properties home or ispn_home 
+                            mandatory or whether it ignores one of them.  
+
+   ispn_home = <path>     - path to directory of infinispan you want to use to run the server
+                          - same notes apply as with "home"
+
+   debug = <flag>         - whether to run server's JVM in debug mode, default False
+                          - debug flags will be ignored by scripts that don't run java process
+
+   debug_port = <port>    - JVM debugger port, default 8787
+
+   debug_suspend = <flag> - whether debugger should suspend JVM, default False
+
+   type = <string>        - server type, this might be anything that the server startup script accepts
+
+   config = <file>        - server config file, it's up to the script how to interpret this
+                            but usually this will be a file or a directory 
+
+
+
+Server management script specification
+--------------------------------------
+
+Theserver startup script has to adhere to the following specification.
+So far the specification is linux-specific, it will be extended after completing default 
+server management scripts for Windows/MacOS.
+
+USAGE:
+   <scriptfilename> [options] <command> <server type> <server name>
+
+   <command>     start|log|out|stop - as defined above, log is optional
+
+   <server type> see server:<name>.type config key
+
+   <server name> this is to discriminate between server configurations/instances
+
+   options:
+       -h <host>    host to bind to, see server:<name>.host config key
+       -p <port>    port to bind to, see server:<name>.port config key
+       -d <port>    turn on remote debugging on given port see: server:<name>.debug* config keys
+       -D <port>    turn on remote debugging with suspend on given port see: server:<name>.debug* config keys
+       -f <dir>     server home folder see: server:<name>.home config key
+       -i <dir>     infinispan home folder see: server:<name>.ispn_home config key
+       -c <file>    server config file see: server:<name>.config config key
+       -k           kill the server with SIGKILL (only for stop command)
+
+FILES:
+   while server is running, the script maintains following files:
+
+   /tmp/ispnconsrv.<server name>.pid   - file containing server pid
+   /tmp/ispnconsrv.<server name>.out   - file containing server's stdout/stderr
+
+   if server runs a java process the <pid> must be the pid of the jvm.
+   this means that you can run only one server with given name at the same time
+   (the script should check this)
+
+EXIT CODE:
+   0 - ok
+   1 - general error
+
+OUTPUT:
+   SERVER_STARTED - on start command if server started successfully
+   SERVER_STARTED_WITH_ERRORS - on start command if server started with errors
+   SERVER_STOPPED - on stop command if server stopped successfully
+   ERROR <msg> - when the opperation wasn't successfull, msg can be multiline, first line has to start with "ERROR "
+
+   for log resp. out command, tail of the server log resp. stdout/err will be output to the screen 
+
+Built-in management script implementation
+-----------------------------------------
+(that resides in bin/server_manager.sh) can manage following server types:
+
+hotrod, memcached   - this will run standard standalone hotrod/memcached server similar to 
+                      the script bin/startServer.sh that is bundled with Infinispan distribution
+
+                      config properties:
+
+                      home      - ignored
+                      ispn_home - mandatory, will be run from there
+                      config    - interpreted as path to infinispan configuration xml file
+
+rest                - this will run JBoss Application Server 7 instance and deploy
+                      modules/rest/infinispan-server-rest.war into it from Infinispan distribution
+
+                      config properties:
+
+                      home      - mandatory, interpreted as home directory of JBoss AS7
+                      ispn_home - mandatory, rest server WAR will be copied from there
+                      config    - interpreted as path to infinispan configuration xml file,
+                                  this will be inserted into the WAR file to be deployed
+
+edg                 - this will manage JBoss Enterprise Datagrid 6
+                    - this instance when running usually contains all server modules (endpoints)
+                      by default
+
+                      config properties:
+
+                      home      - mandatory, interpreted as home directory of JBoss EDG6
+                      ispn_home - ignored
+                      config    - interpreted as path to a config file, whose contents
+                                  will overwrite <home>/standalone/configuration/standalone.xml
+                      port      - ignored, endpoint ports can be set via config file

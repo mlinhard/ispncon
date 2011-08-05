@@ -5,7 +5,7 @@
 Command parsing and execution
 """
 from ispncon import ISPNCON_VERSION, HELP, USAGE, DEFAULT_CACHE_NAME,\
-  TRUE_STR_VALUES
+  TRUE_STR_VALUES, NONE_VALUE
 from ispncon.client import CacheClientError, ConflictError, NotFoundError
 from ispncon.codec import CODEC_NONE, CodecError
 import ConfigParser
@@ -13,17 +13,30 @@ import getopt
 import ispncon
 import os
 import shlex
+import string
+import subprocess
 import sys
 
 __author__ = "Michal Linhard"
 __copyright__ = "(C) 2011 Red Hat Inc."
 
+CONFIG_FILE = "~/.ispncon"
 MAIN_CONFIG_SECTION = "ispncon"
-KNOWN_CONFIG_KEYS = ["client_type", "host", "port", "cache", "exit_on_error", "default_codec", "rest.server_url", "rest.content_type", "hotrod.use_river_string_keys"]
+KNOWN_CONFIG_KEYS = [
+  "client_type", "host", "port", "cache", "exit_on_error", "default_codec", "rest.server_url",
+  "rest.content_type", "hotrod.use_river_string_keys", "server_management.default_server",
+  "server:.host", "server:.port", "server:.script", "server:.home", "server:.ispn_home",
+  "server:.debug", "server:.debug_port", "server:.debug_suspend", "server:.type", "server:.config",
+  "ispncon_home", "server_management.default_host"]
+
+# keys that won't be stored in ~/.ispncon
+TRANSIENT_KEYS = [ "ispncon_home" ]
+BUILTIN_SERVER_SCRIPT_REFERENCE = "BUILT-IN"
+BUILTIN_SERVER_SCRIPT = "/bin/server_manager.sh"
 
 class Config(dict):
   def _override_with_user_config(self):
-    user_cfg_file = os.path.expanduser("~/.ispncon")
+    user_cfg_file = os.path.expanduser(CONFIG_FILE)
     if not os.path.exists(user_cfg_file):
       return
     cfgp = ConfigParser.ConfigParser()
@@ -52,38 +65,76 @@ class Config(dict):
     
   def __str__(self):
     str = ""
-    for  key in KNOWN_CONFIG_KEYS:
+    for key in sorted(self.keys()):
       str += "%s = %s\n" % (key, self[key])
     return str
   
   def __setitem__(self, key, value):
-    if not key in KNOWN_CONFIG_KEYS:
+    if not self._cleanvarsection(key) in KNOWN_CONFIG_KEYS:
       self._error("Unknown config key: %s" % key)
     super(Config, self).__setitem__(key, value)
+
+  def __getitem__(self, *args, **kwargs):
+    ret = dict.__getitem__(self, *args, **kwargs)
+    if (ret == NONE_VALUE):
+      return None
+    else:
+      return ret
 
   def _error(self, msg):
     raise CommandExecutionError(msg)
   
+  def _cleanvarsection(self, section_key):
+    sec, key = self._parse_section_key(section_key);
+    tokens = sec.split(":");
+    if len(tokens) == 1:
+      return section_key
+    elif len(tokens) == 2:
+      return tokens[0] + ":." + key;
+    else:
+      self._error("Invalid section format.")
+
   def _parse_section_key(self, section_key):
     v = section_key.split(".")
     if len(v) == 1:
-      return "ispncon", v[0]
+      return MAIN_CONFIG_SECTION, v[0]
     elif len(v) == 2:
       return v[0], v[1]
     else:
       self._error("Invalid key format. Must be <section>.<key>")
 
   def save(self):
-    f = open(os.path.expanduser("~/.ispncon"), "w")
+    f = open(os.path.expanduser(CONFIG_FILE), "w")
     cfgp = ConfigParser.ConfigParser()
 
     for section_key in self.iterkeys():
+      if self._cleanvarsection(section_key) in TRANSIENT_KEYS:
+        continue
       section, key = self._parse_section_key(section_key)
       if not cfgp.has_section(section):
         cfgp.add_section(section)
       cfgp.set(section, key, self[section_key])
 
     cfgp.write(f)
+
+  def get_configured_servers(self):
+    servlist = [];
+    for key in self:
+      section = self._parse_section_key(key)[0]
+      if section.find("server:") == 0:
+        name = section.split(":")[1]
+        if not name in servlist:
+          servlist.append(name)
+    return sorted(servlist)
+
+  def get_section(self, section_name):
+    sect = {}
+    for section_key, value in self.items():
+      section, key = self._parse_section_key(section_key)
+      if section == section_name:
+        if value != NONE_VALUE:
+          sect[key] = value
+    return sect
 
 class CommandExecutionError(Exception):
   def __init__(self, msg, exit_code=1):
@@ -311,10 +362,120 @@ class CommandExecutor:
     self.client = None # throw away the old client
     self._get_client() # try to create new one
     print "STORED"
-  
+
+  def _replace_builtin_script(self, script):
+    if script == BUILTIN_SERVER_SCRIPT_REFERENCE:
+      return self.config["ispncon_home"] + BUILTIN_SERVER_SCRIPT
+    else:
+      return script
+
+  def _validate_server_config(self, servername, server_config):
+    if not "script" in server_config:
+      self._error("configuration problem in server \"%s\": missingy script path " % servername)
+    if not "type" in server_config:
+      self._error("configuration problem in server \"%s\": missing type" % servername)
+    script = self._replace_builtin_script(server_config["script"])
+    if not os.path.exists(script):
+      self._error("configuration problem in server \"%s\": script doesn't exist: %s" % (servername, script))
+    if not os.access(script, os.X_OK):
+      self._error("configuration problem in server \"%s\": script isn't executable: %s" % (servername, script))
+
+  def _cmd_server(self, args):
+    if (len(args) == 0):
+      print string.join(self.config.get_configured_servers(), ", ")
+      return
+    try:
+      opts1, args1 = getopt.getopt(args, "h:p:d:D:k", ["host=", "port=", "debug=", "debug-suspend=", "kill"])
+    except getopt.GetoptError:
+      self._error("Wrong server command syntax.")
+    if ((len(args1)) != 2 and (len(args1) != 1)):
+      self._error("Wrong server command syntax.")
+    server_name = self.config.get("server_management.default_server")
+    server_host = self.config.get("server_management.default_host")
+    server_command = args1[0]
+    if len(args1) == 2:
+      server_name = args1[1]
+    server_config = self.config.get_section("server:" + server_name)
+    self._validate_server_config(server_name, server_config)
+    if server_config.get("host") != None:
+      server_host = server_config["host"]
+    server_port = server_config.get("port")
+    server_script = self._replace_builtin_script(server_config["script"])
+    server_type = server_config["type"]
+    server_home = server_config.get("home")
+    server_ispn_home = server_config.get("ispn_home")
+    server_config_file = server_config.get("config")
+
+    debug_suspend = False
+    if server_config.get("debug_suspend") in TRUE_STR_VALUES:
+      debug_suspend = True
+
+    debug_port = None
+    debug_suspend_port = None
+
+    # enable debugging
+    if server_config.get("debug") in TRUE_STR_VALUES:
+      if debug_suspend:
+        debug_suspend_port = server_config["debug_port"]
+        if debug_suspend_port == None:
+          debug_suspend_port = "8787"
+      else:
+        debug_port = server_config["debug_port"]
+        if debug_port == None:
+          debug_port = "8787"
+
+    killharsh = False
+
+    for opt, arg in opts1:
+      if opt in ("-h", "--host"):
+        server_host = arg
+      if opt in ("-p", "--port"):
+        server_port = arg
+      if opt in ("-d", "--debug"):
+        debug_port = arg
+      if opt in ("-D", "--debug-suspend"):
+        debug_suspend_port = arg
+      if opt in ("-k", "--kill"):
+        killharsh = True
+
+    args = [server_script]
+    if (server_host != None):
+      args.append("-h")
+      args.append(server_host)
+    if (server_port != None):
+      args.append("-p")
+      args.append(server_port)
+    if (debug_port != None):
+      args.append("-d")
+      args.append(debug_port)
+    if (debug_suspend_port != None):
+      args.append("-D")
+      args.append(debug_suspend_port)
+    if killharsh:
+      args.append("-k")
+    if server_home != None:
+      args.append("-f")
+      args.append(server_home)
+    if server_ispn_home != None:
+      args.append("-i")
+      args.append(server_ispn_home)
+    if server_config_file != None:
+      args.append("-c")
+      args.append(server_config_file)
+    args.append(server_command)
+    args.append(server_type)
+    args.append(server_name)
+
+    subproc = subprocess.Popen(args)
+
+    try:
+      subproc.wait()
+    except KeyboardInterrupt:
+      subproc.terminate()
+
   def _error(self, msg):
     raise CommandExecutionError(msg)
-    
+
   def _possiblyexit(self, exit_code):
     if self.exit_on_error:
       sys.exit(exit_code)
@@ -345,6 +506,8 @@ class CommandExecutor:
         self._cmd_exists(args)
       elif cmd == "config":
         self._cmd_config(args)
+      elif cmd == "server":
+        self._cmd_server(args)
       else:
         self._error("unknown command: %s" % cmd)
     except CommandExecutionError as e:
@@ -368,6 +531,11 @@ def main(args):
     sys.exit(2)     
 
   config = Config() # values here will be overriden by anything passed in commandline
+  script_name = sys.argv[0]
+  if os.path.exists(script_name):
+    idx = string.rfind(script_name, "/bin")
+    if idx != -1:
+      config["ispncon_home"] = script_name[0:idx]
   for opt, arg in opts:
     if opt in ("-c", "--client"):
       config["client_type"] = arg

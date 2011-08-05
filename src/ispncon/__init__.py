@@ -189,4 +189,5 @@ HELP = {
 
 DEFAULT_CACHE_NAME = "___defaultcache"
 TRUE_STR_VALUES = [ "True", "true", "1" ]
+NONE_VALUE = [ "None" ]
 
