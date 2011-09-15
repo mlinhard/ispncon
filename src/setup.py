@@ -8,7 +8,7 @@ setup(name = 'ispncon',
       description = 'Infinispan Console',
       author = 'Michal Linhard',
       author_email = 'michal@linhard.sk',
-      py_modules = ['ispncon.console', 'ispncon.client', 'ispncon.codec' ],
+      py_modules = ['ispncon.console', 'ispncon.client', 'ispncon.codec', 'ispncon.servermanagement' ],
       classifiers = [
           "License :: OSI Approved :: GNU Library or Lesser General Public License (LGPL)",
           "Programming Language :: Python",
@@ -22,7 +22,8 @@ setup(name = 'ispncon',
         'setuptools',
         'greenlet',
         'infinispan',
-        'python-memcached'
+        'python-memcached',
+        'psutil'
       ],
       long_description = "See `Infinispan Console <https://github.com/infinispan/ispncon>`_ for more information."
       )

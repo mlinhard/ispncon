@@ -291,7 +291,10 @@ if [ "$srvcommand" == "start" ]; then
 elif [ "$srvcommand" == "log" ]; then
    echo "ERROR not yet supported"
 elif [ "$srvcommand" == "out" ]; then
-   assert_running
+   if [ ! -f "$srvoutfile" ]; then
+      echo "ERROR Server \"${srvname}\" is not running."
+      exit 1
+   fi
    tail -f $srvoutfile
 elif [ "$srvcommand" == "stop" ]; then
    assert_running

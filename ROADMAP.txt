@@ -16,27 +16,32 @@ FUTURE TODO:
   - test on Windows
   - test on MacOS
   - test on python 3 (make it work with python 3)
-  - create control scripts for Windows and MacOS
 
 
 Server management proposal
 --------------------------
 
 This proposal is about adding server management into ispncon.
-The cache servers will be managed by external control scripts that will adhere to a specified 
-interface (ispncon project will provide default implementation in bin/server_manager.sh). 
-In the first phase the scripts will be linux bash scripts only. No windows .bat files will be provided.
+The cache servers will be managed by set of server managers of different types.
+Users will be able to add their manager scripts for other kinds of servers.
 
-This script will have following usage:
+The command can be called in two forms:
 
-   ispncon server [options] [<command>] [<name>]
+   ispncon server
+
+              prints all configured servers with their statuses
+              INVALID - invalid configuration
+              RUNNING - server is running
+              STOPPED - server is not running
+
+   ispncon server <command> [options] [<name>]
 
    <command>  start - start the server
-              log - see the server's log (tail)
-              out - see the server's stdout/stderr (tail)
+              log - see the server's log
+              out - see the server's stdout/stderr
+              jstack - see the server's jstack dump
               stop - stop the server
 
-              if no command is specified list of all configured servers will be printed
 
    <name>     name of the server this command is for
               valid characters in server name are _ [a-z] [A-Z] [0-9]
@@ -44,11 +49,13 @@ This script will have following usage:
               if not specified, default will be used. see server_management.default_server config key
 
    options:
-       -h <host>    host to bind to, see server:<name>.host config key
-       -p <port>    port to bind to, see server:<name>.port config key
+       -h <host>    host to bind to, see server:<name>.listen_addr config key
+       -p <port>    port to bind to, see server:<name>.listen_port config key
        -d <port>    turn on remote debugging on given port see: server:<name>.debug* config keys
        -D <port>    turn on remote debugging with suspend on given port see: server:<name>.debug* config keys
        -k           when stopping the server, kill the server, don't wait for graceful shutdown
+       -P "<key> <value>"
+                    override server configuration key with a new value
 
 
 Server instance configuration
@@ -59,9 +66,19 @@ and for each server name there will be a section server:<name>
 
    [server_management]
 
-   default_server = <name> -default server to use, this will let us omit the server name in server commands
+   out_view = full        - log command will print full log  
+              tail        - log command will print only tail of the o (default)
+              follow      - log command will follow the log until Ctrl+C is pressed
 
-   default_host = <name>   -default server to use, this will let us omit the server name in server commands
+   out_tail_size = <num_lines>   - how many lines will log command print, default 10
+
+   default_server = <name>       - default server to use, this will let us omit the server name in server commands
+
+   default_listen_addr = <addr>  - default host/ip_addr to bind to
+
+   default_listen_port = <port>  - default port to bind to
+
+   default_java_opts = <opts>    - default JAVA_OPTS to use when running the server, works only with java based servers
 
    [server:<name>]
 
@@ -72,18 +89,16 @@ and for each server name there will be a section server:<name>
                             (this only works if ispncon_home config key is properly set, but it should be true 
                             for most systems.)
 
-   host = <host>          - host/ip_addr the instance will be bound to
+   type = <string>        - server type, this might be anything that the server startup script accepts
 
-   port = <port>          - port the instance will be bound to
+   listen_addr = <host>   - host/ip_addr the instance will be bound to
 
-   home = <path>          - path to server's home directory
-                          - you should give different servers different home directories so that they can
-                            possibly run in parallel and not interfere with each other
-                          - it's upon the script whether it considers one of the properties home or ispn_home 
-                            mandatory or whether it ignores one of them.  
+   listen_port = <port>   - port the instance will be bound to, this might not be supported by
 
-   ispn_home = <path>     - path to directory of infinispan you want to use to run the server
-                          - same notes apply as with "home"
+   java_opts              - JAVA_OPTS to be passed to the JVM on startup, only works if the server
+                            is a java process (of course)
+                          - if no java_opts are specified, then server_management.default_java_opts will
+                            be used and if they are not present, internal default will be used
 
    debug = <flag>         - whether to run server's JVM in debug mode, default False
                           - debug flags will be ignored by scripts that don't run java process
@@ -92,44 +107,112 @@ and for each server name there will be a section server:<name>
 
    debug_suspend = <flag> - whether debugger should suspend JVM, default False
 
-   type = <string>        - server type, this might be anything that the server startup script accepts
-
-   config = <file>        - server config file, it's up to the script how to interpret this
-                            but usually this will be a file or a directory 
-
+   kill = <flag>          - whether stop command should kill the server forcefully
+                            (in Linux it means sending SIGKILL signal)
+                          - default false
 
 
-Server management script specification
---------------------------------------
+Server manager types
+--------------------
+
+custom              - this will run a custom server management script
+
+                      config properties:
+
+                      script      - REQUIRED, path to custom server management script
+
+                      standard config keys are passed this way:
+
+                      script         - not passed
+                      type           - not passed
+                      listen_addr    - via -h option
+                      listen_port    - via -p option
+                      java_opts      - via -P option
+                      debug          - via -d and -D options
+                      debug_port     - via -d and -D options
+                      debug_suspend  - via -d and -D options
+                      kill           - via -k option
+
+                      any nonstandard config keys are passed via -P option
+
+
+hotrod, memcached   - this will run standard standalone hotrod/memcached server similar to 
+                      the script bin/startServer.sh that is bundled with Infinispan distribution
+
+                      config properties:
+
+                      ispn_home   - REQUIRED, will be run from there
+                      config_xml  - OPTIONAL, interpreted as path to infinispan configuration xml file
+
+                      + all standard config keys are supported and OPTIONAL
+
+rest_as7            - this will run JBoss Application Server 7 instance and deploy
+                      modules/rest/infinispan-server-rest.war into it from Infinispan distribution
+
+                      config properties:
+
+                      jboss_home - REQUIRED, JBoss AS7 home directory
+                      ispn_home  - REQUIRED, rest server WAR will be copied from there
+                      config_xml - OPTIONAL, interpreted as path to infinispan configuration xml file,
+                                   this will be inserted into the WAR file to be deployed
+
+                      + all standard config keys are supported and OPTIONAL except
+
+                      listen_addr - OPTIONAL, if specified, standalone.xml (after possibly replaced by config_xml)
+                                    is edited so that interface binding is replaced with this value
+                      listen_port - IGNORED, has to be set manually in standalone.xml
+
+edg                 - this will manage JBoss Enterprise Datagrid 6
+                    - this instance when running usually contains all server modules (endpoints)
+                      by default
+
+                      config properties:
+
+                      jboss_home   - REQUIRED, interpreted as home directory of JBoss EDG6
+                      config_xml - interpreted as path to a config file, whose contents
+                                   will overwrite <edg_home>/standalone/configuration/standalone.xml
+
+                      + all standard config keys are supported and OPTIONAL except
+
+                      listen_addr - OPTIONAL, if specified, standalone.xml (after possibly replaced by config_xml)
+                                    is edited so that interface binding is replaced with this value
+                      listen_port - IGNORED, ports for all endpoints have to be set manually in standalone.xml
+
+How to determine the server type from server config section:
+
+1. if "type" key is present then it determines the server type
+2. if "type" key is not present then 
+      if "script" key is present then type = custom
+      if "script" key is not present then the server config is in status INVALID
+
+Custom server management script specification
+---------------------------------------------
 
 Theserver startup script has to adhere to the following specification.
 So far the specification is linux-specific, it will be extended after completing default 
 server management scripts for Windows/MacOS.
 
 USAGE:
-   <scriptfilename> [options] <command> <server type> <server name>
+   <scriptfilename> [options] <command> <server name>
 
-   <command>     start|log|out|stop - as defined above, log is optional
-
-   <server type> see server:<name>.type config key
+   <command>     start|log|out|stop|getStatus - as defined above, log is optional
 
    <server name> this is to discriminate between server configurations/instances
 
    options:
-       -h <host>    host to bind to, see server:<name>.host config key
-       -p <port>    port to bind to, see server:<name>.port config key
+       -h <addr>    addr to bind to, see server:<name>.listen_addr config key
+       -p <port>    port to bind to, see server:<name>.listen_port config key
        -d <port>    turn on remote debugging on given port see: server:<name>.debug* config keys
        -D <port>    turn on remote debugging with suspend on given port see: server:<name>.debug* config keys
-       -f <dir>     server home folder see: server:<name>.home config key
-       -i <dir>     infinispan home folder see: server:<name>.ispn_home config key
-       -c <file>    server config file see: server:<name>.config config key
+       -P "<key> <value>"
+                    for passing custom configuration values
        -k           kill the server with SIGKILL (only for stop command)
 
 FILES:
-   while server is running, the script maintains following files:
+   while server is running, starting or stopping, the script maintains following files:
 
-   /tmp/ispnconsrv.<server name>.pid   - file containing server pid
-   /tmp/ispnconsrv.<server name>.out   - file containing server's stdout/stderr
+   /tmp/ispncon.server.<server name>.pid   - file containing server pid
+   /tmp/ispncon.server.<server name>.out   - file containing server's stdout/stderr
 
    if server runs a java process the <pid> must be the pid of the jvm.
    this means that you can run only one server with given name at the same time
@@ -140,44 +223,14 @@ EXIT CODE:
    1 - general error
 
 OUTPUT:
-   SERVER_STARTED - on start command if server started successfully
-   SERVER_STARTED_WITH_ERRORS - on start command if server started with errors
-   SERVER_STOPPED - on stop command if server stopped successfully
+   SERVER_STARTED <name> - on start command if server started successfully
+   SERVER_STARTED_WITH_ERRORS <name> - on start command if server started with errors
+   SERVER_STOPPED <name> - on stop command if server stopped successfully
    ERROR <msg> - when the opperation wasn't successfull, msg can be multiline, first line has to start with "ERROR "
 
-   for log resp. out command, tail of the server log resp. stdout/err will be output to the screen 
+   for log resp. out command, tail of the server log resp. stdout/err will be output to the screen
 
-Built-in management script implementation
------------------------------------------
-(that resides in bin/server_manager.sh) can manage following server types:
-
-hotrod, memcached   - this will run standard standalone hotrod/memcached server similar to 
-                      the script bin/startServer.sh that is bundled with Infinispan distribution
-
-                      config properties:
-
-                      home      - ignored
-                      ispn_home - mandatory, will be run from there
-                      config    - interpreted as path to infinispan configuration xml file
-
-rest                - this will run JBoss Application Server 7 instance and deploy
-                      modules/rest/infinispan-server-rest.war into it from Infinispan distribution
-
-                      config properties:
-
-                      home      - mandatory, interpreted as home directory of JBoss AS7
-                      ispn_home - mandatory, rest server WAR will be copied from there
-                      config    - interpreted as path to infinispan configuration xml file,
-                                  this will be inserted into the WAR file to be deployed
-
-edg                 - this will manage JBoss Enterprise Datagrid 6
-                    - this instance when running usually contains all server modules (endpoints)
-                      by default
-
-                      config properties:
-
-                      home      - mandatory, interpreted as home directory of JBoss EDG6
-                      ispn_home - ignored
-                      config    - interpreted as path to a config file, whose contents
-                                  will overwrite <home>/standalone/configuration/standalone.xml
-                      port      - ignored, endpoint ports can be set via config file
+   on getStatus command the answer is one line status 
+   INVALID - invalid configuration, or error occured
+   RUNNING - server is running
+   STOPPED - server is not running

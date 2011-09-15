@@ -2,8 +2,8 @@
 .pydevproject
 .settings
 *.pyc
-build
-dist
+src/build
+src/dist
 src/work
 ispncon.egg-info
 
