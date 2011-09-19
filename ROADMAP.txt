@@ -48,18 +48,40 @@ The command can be called in two forms:
 
               if not specified, default will be used. see server_management.default_server config key
 
-   options:
-       -h <host>    host to bind to, see server:<name>.listen_addr config key
-       -p <port>    port to bind to, see server:<name>.listen_port config key
-       -d <port>    turn on remote debugging on given port see: server:<name>.debug* config keys
-       -D <port>    turn on remote debugging with suspend on given port see: server:<name>.debug* config keys
-       -k           when stopping the server, kill the server, don't wait for graceful shutdown
-       -P "<key> <value>"
-                    override server configuration key with a new value
+   common options:
 
+        -P "<key> <value>"          override server config with a new value
+
+   command specific options:
+
+      start:
+        -l --listen-addr <addr>     host to bind to, see server:<name>.listen_addr config key
+        -p --listen-port <port>     port to bind to, see server:<name>.listen_port config key
+        -d --debug <port>           turn on remote debugging on given port see: server:<name>.debug* config keys
+        -D --debug-suspend <port>   turn on remote debugging with suspend on given port see: server:<name>.debug* config keys
+        -w --wait-for-start         wait for server startup, block the call until the server is started
+
+      stop:
+        -k --kill                   kill the server, don't wait for graceful shutdown
+        -s --shutdown               graceful shutdown (default, if server_management.kill_by_default is not set)
+        -w --wait-for-stop          wait for server stop, block the call until the server is stopped
+        (note that -k and -s options are mutually exclusive, they override setting server_management.kill_by_default)
+
+      out:
+        -t --tail                   display the tail of the output
+        -f --follow                 follow the tail of the output (until Ctrl+C is pressed)
+        -F --full                   display the full output
+        -n --num-lines <lines>      set number of lines to display in tail and follow mode
+        (note that -t -f -F options are mutually exclusive, they override setting server_management.out_view)
 
 Server instance configuration
 -----------------------------
+
+The configuration values have folowing precedence:
+   1. inline overrides when calling a command (e.g. ispncon server start --listen-addr <addr> <name>)
+   2. server:<name> section values
+   3. server_management serction default values
+   4. internal defaults
 
 There will be a new config section called "server_management"
 and for each server name there will be a section server:<name>
@@ -74,11 +96,13 @@ and for each server name there will be a section server:<name>
 
    default_server = <name>       - default server to use, this will let us omit the server name in server commands
 
-   default_listen_addr = <addr>  - default host/ip_addr to bind to
+   default_listen_addr = <addr>  - default host/ip_addr to bind to, this will be used in all servers that don't have listen_addr overriden
 
-   default_listen_port = <port>  - default port to bind to
+   default_listen_port = <port>  - default port to bind to, this will be used in all servers that don't have listen_port overriden
 
    default_java_opts = <opts>    - default JAVA_OPTS to use when running the server, works only with java based servers
+
+   kill_by_default = <flag>      - when stopping the server, it will be killed by default, by default this is false
 
    [server:<name>]
 
@@ -93,7 +117,7 @@ and for each server name there will be a section server:<name>
 
    listen_addr = <host>   - host/ip_addr the instance will be bound to
 
-   listen_port = <port>   - port the instance will be bound to, this might not be supported by
+   listen_port = <port>   - port the instance will be bound to, this might not be supported by server manager
 
    java_opts              - JAVA_OPTS to be passed to the JVM on startup, only works if the server
                             is a java process (of course)
@@ -106,10 +130,6 @@ and for each server name there will be a section server:<name>
    debug_port = <port>    - JVM debugger port, default 8787
 
    debug_suspend = <flag> - whether debugger should suspend JVM, default False
-
-   kill = <flag>          - whether stop command should kill the server forcefully
-                            (in Linux it means sending SIGKILL signal)
-                          - default false
 
 
 Server manager types
@@ -131,7 +151,6 @@ custom              - this will run a custom server management script
                       debug          - via -d and -D options
                       debug_port     - via -d and -D options
                       debug_suspend  - via -d and -D options
-                      kill           - via -k option
 
                       any nonstandard config keys are passed via -P option
 
@@ -195,7 +214,7 @@ server management scripts for Windows/MacOS.
 USAGE:
    <scriptfilename> [options] <command> <server name>
 
-   <command>     start|log|out|stop|getStatus - as defined above, log is optional
+   <command>     start|out|stop|getStatus - as defined above, log is optional
 
    <server name> this is to discriminate between server configurations/instances
 
@@ -223,9 +242,9 @@ EXIT CODE:
    1 - general error
 
 OUTPUT:
-   SERVER_STARTED <name> - on start command if server started successfully
-   SERVER_STARTED_WITH_ERRORS <name> - on start command if server started with errors
-   SERVER_STOPPED <name> - on stop command if server stopped successfully
+   SERVER_START <name> - on successful start command
+   SERVER_STOP <name> - on successful stop command
+   SERVER_START_WITH_ERRORS <name> - on start command with wait if server started with errors
    ERROR <msg> - when the opperation wasn't successfull, msg can be multiline, first line has to start with "ERROR "
 
    for log resp. out command, tail of the server log resp. stdout/err will be output to the screen

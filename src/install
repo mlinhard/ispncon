@@ -1,0 +1,4 @@
+#!/bin/sh
+sudo python setup.py install
+sudo rm -rf build dist ispncon.egg-info
+sudo rm -rf ispncon/*.pyc

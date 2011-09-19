@@ -4,14 +4,18 @@
 """
 Server management related code.
 """
-from ispncon import TRUE_STR_VALUES
+from ispncon import TRUE_STR_VALUES, CommandExecutionError
 from subprocess import STDOUT
 from xml.etree.ElementTree import register_namespace, parse
+import getopt
+import io
 import os
 import psutil
+import re
 import shutil
 import signal
 import subprocess
+import time
 
 XMLNS_DOMAIN = "urn:jboss:domain:1.0"
 BAK = ".ispncon.backup"
@@ -41,6 +45,7 @@ register_namespace("threads"      , "urn:jboss:domain:threads:1.0")
 
 PID_FILE_TEMPLATE = "/tmp/ispncon.server.%s.pid"
 OUT_FILE_TEMPLATE = "/tmp/ispncon.server.%s.out"
+ACTIVE_WAIT_SLEEP = 0.2
 
 def jpsgrep(str):
   """find first java process id that contains str among it's parameters
@@ -55,6 +60,86 @@ def jpsgrep(str):
           return pid
   return -1
 
+def tailFile(file, lines):
+  f = io.open(file, "rb")
+  BUFSIZ = 1024
+  f.seek(0, io.SEEK_END)
+  bytes = f.tell()
+  size = lines
+  block = -1
+  data = []
+  while size > 0 and bytes > 0:
+    if (bytes - BUFSIZ > 0):
+      # Seek back one whole BUFSIZ
+      f.seek(block*BUFSIZ, 2)
+      # read BUFFER
+      data.append(f.read(BUFSIZ))
+    else:
+      # file too small, start from begining
+      f.seek(0,0)
+      # only read what was not read
+      data.append(f.read(bytes))
+    linesFound = data[-1].count('\n')
+    size -= linesFound
+    bytes -= BUFSIZ
+    block -= 1
+  f.close()
+  return ''.join(data).splitlines()[-lines:]
+
+def folowFrom(file, offset):
+    """Follow a file from specific offset"""
+    try:
+      # wait until file exists
+      while not os.path.exists(file):
+        time.sleep(ACTIVE_WAIT_SLEEP)
+
+      f = io.open(file, "r")
+      f.seek(offset, io.SEEK_SET)
+      line = f.readline()
+      while True:
+        if line: #line available, print it!
+          print line,
+        else: # line not available
+          time.sleep(ACTIVE_WAIT_SLEEP)
+        line = f.readline()
+    except KeyboardInterrupt:
+      f.close()
+
+def findTailOffset(file, lines):
+  f = io.open(file, "rb")
+  BUFSIZ = 1024
+  f.seek(0, io.SEEK_END)
+  bytes = f.tell()
+  size = lines
+  block = -1
+  data = None
+  while size > 0 and bytes > 0:
+    if (bytes - BUFSIZ > 0):
+      # Seek back one whole BUFSIZ
+      f.seek(block*BUFSIZ, io.SEEK_END)
+      # read BUFFER
+      data = f.read(BUFSIZ)
+    else:
+      # file too small, start from begining
+      f.seek(0, io.SEEK_SET)
+      # only read what was not read
+      data = f.read(bytes)
+    linesFound = data.count('\n')
+    size -= linesFound
+    bytes -= BUFSIZ
+    block -= 1
+  if (bytes - BUFSIZ > 0):
+    block += 1
+    f.seek(block*BUFSIZ, io.SEEK_END)
+  else:
+    f.seek(0, io.SEEK_SET)
+  while size <= 0:
+    f.readline()
+    size += 1
+  pos = f.tell()
+  f.close()
+  return pos
+
 class ServerManagerException(Exception):
   """Exception in ServerManager"""
   pass
@@ -66,11 +151,34 @@ class InvalidServerConfigException(ServerManagerException):
 class ServerManager():
   """Superclass for server managers"""
   
-  def __init__(self, config, name):
-    self._config = config
-    self._name = name
+  def __init__(self, ispncon_config, server_name):
+    self._ispncon_config = ispncon_config
+    self._config = self._get_server_config_with_defaults(server_name)
+    self._name = server_name
 
-  def executeCommand(self, command):
+  def _get_server_config_with_defaults(self, server_name):
+    server_config = self._ispncon_config.get_section("server:" + server_name)
+
+    if server_config.get("listen_addr") == None:
+      server_config["listen_addr"] = self._ispncon_config.get("default_listen_addr")
+    if server_config.get("listen_port") == None:
+      server_config["listen_port"] = self._ispncon_config.get("default_listen_port")
+    if server_config.get("java_opts") == None:
+      server_config["java_opts"] = self._ispncon_config.get("default_java_opts")
+    if server_config.get("java_opts") == None:
+      server_config["java_opts"] = DEFAULT_JAVA_OPTS_INTERNAL
+
+    return server_config
+
+  def start(self, wait=False, config_overrides={}):
+    """Start the server instance"""
+    raise ServerManagerException("Not implemented")
+
+  def stop(self, kill=False, wait=False, config_overrides={}):
+    """Stop the server instance"""
+    raise ServerManagerException("Not implemented")
+
+  def out(self, mode="tail", num_lines=10, config_overrides={}):
     raise ServerManagerException("Not implemented")
 
   def getStatus(self):
@@ -79,43 +187,55 @@ class ServerManager():
 class ScriptServerManager(ServerManager):
   """ServerManager that uses custom management script to controll the server"""
 
-  def __init__(self, config, name, script):
+  def __init__(self, ispncon_config, server_name, script):
     self._script = script
-    ServerManager.__init__(self, config, name)
+    ServerManager.__init__(self, ispncon_config, server_name)
     if not os.path.exists(script):
-      raise ServerManagerException("configuration problem in server \"%s\": script doesn't exist: %s" % (name, script))
+      raise ServerManagerException("configuration problem in server \"%s\": script doesn't exist: %s" % (server_name, script))
     if not os.access(script, os.X_OK):
-      raise ServerManagerException("configuration problem in server \"%s\": script isn't executable: %s" % (name, script))
+      raise ServerManagerException("configuration problem in server \"%s\": script isn't executable: %s" % (server_name, script))
+
+  def start(self, wait=False, config_overrides={}):
+    self.executeCommand("start")
+
+  def stop(self, kill=False, wait=False, config_overrides={}):
+    self.executeCommand("stop")
+
+  def out(self, mode="tail", num_lines=10, config_overrides={}):
+    self.executeCommand("out")
 
   def executeCommand(self, command):
     args = [self._script]
-    cfg_listen_addr = self._config.pop("listen_addr", None)
-    cfg_listen_port = self._config.pop("listen_port", None)
-    if (cfg_listen_addr != None):
-      args.append("-h")
-      args.append(cfg_listen_addr)
-    if (cfg_listen_port != None):
-      args.append("-p")
-      args.append(cfg_listen_port)
-    cfg_debug = self._config.pop("debug", None)
-    if (cfg_debug != None and cfg_debug in TRUE_STR_VALUES):
-      cfg_debug_port = self._config.pop("debug_port", None)
-      cfg_debug_suspend = self._config.pop("debug_suspend", None)
-      if cfg_debug_port == None:
-        cfg_debug_port = DEFAULT_DEBUG_PORT
-      if (cfg_debug_suspend != None and cfg_debug_suspend in TRUE_STR_VALUES):
-        args.append("-D")
-        args.append(cfg_debug_port)
-      else:
-        args.append("-d")
-        args.append(cfg_debug_port)
-    cfg_kill = self._config.pop("kill", None)
-    if cfg_kill != None and cfg_kill in TRUE_STR_VALUES:
-      args.append("-k")
+    if command == "start":
+      cfg_listen_addr = self._config.pop("listen_addr", None)
+      cfg_listen_port = self._config.pop("listen_port", None)
+      if (cfg_listen_addr != None):
+        args.append("-h")
+        args.append(cfg_listen_addr)
+      if (cfg_listen_port != None):
+        args.append("-p")
+        args.append(cfg_listen_port)
+      cfg_debug = self._config.pop("debug", None)
+      if (cfg_debug != None and cfg_debug in TRUE_STR_VALUES):
+        cfg_debug_port = self._config.pop("debug_port", None)
+        cfg_debug_suspend = self._config.pop("debug_suspend", None)
+        if cfg_debug_port == None:
+          cfg_debug_port = DEFAULT_DEBUG_PORT
+        if (cfg_debug_suspend != None and cfg_debug_suspend in TRUE_STR_VALUES):
+          args.append("-D")
+          args.append(cfg_debug_port)
+        else:
+          args.append("-d")
+          args.append(cfg_debug_port)
+    if command == "stop":
+      cfg_kill = self._config.pop("kill", None)
+      if cfg_kill != None and cfg_kill in TRUE_STR_VALUES:
+        args.append("-k")
     #pass rest of the config parameters via -P options
     for Pkey, Pvalue in self._config:
       args.append("-P")
       args.append("\"%s %s\"" % (Pkey, Pvalue))
+
     args.append(command)
     args.append(self._name)
 
@@ -128,35 +248,35 @@ class ScriptServerManager(ServerManager):
 
 
 class BuiltInServerManager(ServerManager):
-  
-  def executeCommand(self, command):
-    if command == "start":
-      self.start()
-    elif command == "stop":
-      self.stop()
-    elif command == "out":
-      self.out()
-    elif command == "log":
-      self.log()
-    else:
-      raise ServerManagerException("Unknown command %s" % command)
 
   def writePid(self, pid):
     pidfile = open(PID_FILE_TEMPLATE % self._name, "w")
     pidfile.write(str(pid))
     pidfile.close()
 
-  def start(self):
-    raise ServerManagerException("This operation is not yet supported.")
+  def _waitForLine(self, file, patterns):
+    """Wait until a line that matches a pattern appears in the given file. The file might be a constantly growing log."""
+    try:
+      # wait until file exists
+      while not os.path.exists(file):
+        time.sleep(ACTIVE_WAIT_SLEEP)
 
-  def stop(self):
-    raise ServerManagerException("This operation is not yet supported.")
-
-  def out(self):
-    raise ServerManagerException("This operation is not yet supported.")
-
-  def log(self):
-    raise ServerManagerException("This operation is not yet supported.")
+      # wait until the pattern is found in a line
+      f = io.open(file, "r")
+      line = f.readline()
+      while True:
+        if line:
+          for result, pattern in patterns.iteritems():
+            if re.match(pattern, line): # line matches
+              return result
+            else: # line doesn't match the pattern
+              line = f.readline()
+        else: # line not available
+          time.sleep(ACTIVE_WAIT_SLEEP)
+          line = f.readline()
+      f.close()
+    except KeyboardInterrupt:
+      print "Waiting interrupted."
 
   def _validate_ispn_home(self, path):
     if not (os.path.exists(path) and os.path.isdir(path)):
@@ -173,8 +293,8 @@ class BuiltInServerManager(ServerManager):
 class InfinispanServerManager(BuiltInServerManager):
   """ServerManager for standard community Infinispan server"""
 
-  def __init__(self, config, name):
-    BuiltInServerManager.__init__(self, config, name)
+  def __init__(self, ispncon_config, server_name):
+    BuiltInServerManager.__init__(self, ispncon_config, server_name)
     ispn_home = self._config.get("ispn_home")
     if ispn_home == None:
       raise InvalidServerConfigException("ispn_home config key is required for hotrod/memcached server manager")
@@ -204,8 +324,8 @@ class AS7ConfigXmlEditor:
 class AS7BasedServerManager(BuiltInServerManager):
   """ServerManager for servers based on JBoss AS 7"""
 
-  def __init__(self, config, name):
-    BuiltInServerManager.__init__(self, config, name)
+  def __init__(self, ispncon_config, server_name):
+    BuiltInServerManager.__init__(self, ispncon_config, server_name)
     self.jboss_home = self._config.get("jboss_home")
     if self.jboss_home == None:
       raise InvalidServerConfigException("jboss_home config key is required for AS7 based server manager")
@@ -228,50 +348,68 @@ class AS7BasedServerManager(BuiltInServerManager):
     if not (os.path.exists(checkpath) and os.path.isfile(checkpath)):
       raise InvalidServerConfigException("Invalid jboss_home directory: %s. Missing standalone.xml config file." % path)
 
-  def start(self):
-    if self.findPid() != -1:
-      raise ServerManagerException("Server is already running.")
+  def _applyConfigOverrides(self, overrides):
+    for key, value in overrides:
+      self._config[key] = value
 
-    binary = self.jboss_home + "/bin/standalone.sh"
-    standaloneXml = self.jboss_home + "/standalone/configuration/standalone.xml"
+  def start(self, wait=False, config_overrides={}):
+    try:
+      self._applyConfigOverrides(config_overrides)
+      if self.findPid() != -1:
+        raise ServerManagerException("Server is already running.")
 
-    # user supplied config exists
-    config_xml = self._config.get("config_xml")
-    if config_xml != None:
-      backupxml = standaloneXml + BAK
-      if not os.path.exists(backupxml):
-        shutil.copyfile(self._path, backupxml)
-      shutil.copyfile(config_xml, standaloneXml) #overwrite old standalone.xml
+      binary = self.jboss_home + "/bin/standalone.sh"
+      standaloneXml = self.jboss_home + "/standalone/configuration/standalone.xml"
 
-    # we want to change hostname in the config
-    listen_addr = self._config.get("listen_addr")
-    if (listen_addr != None):
-      editor = AS7ConfigXmlEditor(standaloneXml)
-      editor.setAllInterfaces(listen_addr)
-      editor.save() # this will create backup if previous step didn't
+      # user supplied config exists
+      config_xml = self._config.get("config_xml")
+      if config_xml != None:
+        backupxml = standaloneXml + BAK
+        if not os.path.exists(backupxml):
+          shutil.copyfile(self._path, backupxml)
+        shutil.copyfile(config_xml, standaloneXml) #overwrite old standalone.xml
 
-    if (self._config.get("listen_port") != None):
-      print "WARNING: listen_port config key is ignored in AS7 based server manager"
-      
-    java_opts = self._config.get("java_opts")
-    debug = self._config.get("debug")
-    if debug != None and debug in TRUE_STR_VALUES:
-      debug_suspend = self._config.get("debug_suspend")
-      debug_port = self._config.get("debug_port", DEFAULT_DEBUG_PORT)
-      suspend = "n"
-      if debug_suspend != None and debug_suspend in TRUE_STR_VALUES:
-        suspend = "y"
-      java_opts = "%s -Xrunjdwp:transport=dt_socket,address=%s,server=y,suspend=%s" % (java_opts, debug_port, suspend)
-    java_opts += " -Dispncon.server.name=%s" % self._name  
+      # we want to change hostname in the config
+      listen_addr = self._config.get("listen_addr")
+      if (listen_addr != None):
+        editor = AS7ConfigXmlEditor(standaloneXml)
+        editor.setAllInterfaces(listen_addr)
+        editor.save() # this will create backup if previous step didn't
 
-    args = [binary]
-    env1 = { "JAVA_OPTS" : java_opts }
+      if (self._config.get("listen_port") != None):
+        print "WARNING: listen_port config key is ignored in AS7 based server manager"
 
-    outfile = open((OUT_FILE_TEMPLATE % self._name), 'w')
+      java_opts = self._config.get("java_opts")
+      debug = self._config.get("debug")
+      if debug != None and debug in TRUE_STR_VALUES:
+        debug_suspend = self._config.get("debug_suspend")
+        debug_port = self._config.get("debug_port", DEFAULT_DEBUG_PORT)
+        suspend = "n"
+        if debug_suspend != None and debug_suspend in TRUE_STR_VALUES:
+          suspend = "y"
+        java_opts = "%s -Xrunjdwp:transport=dt_socket,address=%s,server=y,suspend=%s" % (java_opts, debug_port, suspend)
+      java_opts += " -Dispncon.server.name=%s" % self._name
 
-    #here we're just spawning a process and ending this one
-    p = subprocess.Popen(args, env=env1, stdout=outfile, stderr=STDOUT)
-    self.writePid(p.pid)
+      args = [binary]
+      env1 = { "JAVA_OPTS" : java_opts }
+
+      outfile_name = OUT_FILE_TEMPLATE % self._name
+      outfile = open(outfile_name, 'w')
+
+      #here we're just spawning a process and ending this one
+      p = subprocess.Popen(args, env=env1, stdout=outfile, stderr=STDOUT)
+      self.writePid(p.pid)
+
+      if (wait):
+        result = self._waitForLine(outfile_name, { "ok" : ".*[org\.jboss\.as].*started in.*", "error" : ".*[org\.jboss\.as].*started (with errors) in.*" })
+        if result == "ok":
+          print "SERVER_START " + self._name
+        elif result == "error":
+          print "SERVER_START_WITH_ERRORS " + self._name
+      else:
+        print "SERVER_START " + self._name
+    except Exception as e:
+      raise ServerManagerException(e.args[0])
 
   def findPid(self):
     return jpsgrep("-Dispncon.server.name="+self._name)
@@ -295,33 +433,63 @@ class AS7BasedServerManager(BuiltInServerManager):
        RUNNING
        check if /tmp/ispncon.server.<name>.pid exists, if not, create it
     """
-    pid = self.findPid()
-    pidfile = PID_FILE_TEMPLATE % self._name 
-    if pid == -1:
+    try:
+      pid = self.findPid()
+      pidfile = PID_FILE_TEMPLATE % self._name
+      if pid == -1:
+        if os.path.exists(pidfile):
+          os.remove(pidfile)
+        outfile = OUT_FILE_TEMPLATE % self._name
+        if os.path.exists(outfile):
+          os.remove(outfile)
+        return "STOPPED"
+      else:
+        if not os.path.exists(pidfile):
+          self.writePid(pid)
+        return "RUNNING"
+    except Exception as e:
+      raise ServerManagerException(e.args[0])
+
+  def stop(self, kill=False, wait=False, config_overrides={}):
+    try:
+      self._applyConfigOverrides(config_overrides)
+      pid = self.findPid()
+      if pid == -1:
+        raise ServerManagerException("Server is not running.")
+      else:
+        if kill:
+          os.kill(pid, signal.SIGKILL)
+        else:
+          os.kill(pid, signal.SIGTERM)
+          if wait:
+            while self.findPid() != -1:
+              time.sleep(ACTIVE_WAIT_SLEEP)
+      pidfile = PID_FILE_TEMPLATE % self._name
+      outfile = OUT_FILE_TEMPLATE % self._name
       if os.path.exists(pidfile):
         os.remove(pidfile)
-      outfile = OUT_FILE_TEMPLATE % self._name 
       if os.path.exists(outfile):
         os.remove(outfile)
-      return "STOPPED"
-    else:
-      if not os.path.exists(pidfile):
-        self.writePid(pid)
-      return "RUNNING"
+      print "SERVER_STOP " + self._name
+    except Exception as e:
+      raise ServerManagerException(e.args[0])
 
-  def stop(self):
-    pid = self.findPid()
-    if pid == -1:
+  def out(self, mode="tail", num_lines=10, config_overrides={}):
+    self._applyConfigOverrides(config_overrides)
+    if self.findPid() == -1:
       raise ServerManagerException("Server is not running.")
+    if mode == "tail":
+      tailFile(OUT_FILE_TEMPLATE % self._name, num_lines)
+    elif mode == "full":
+      f = open(OUT_FILE_TEMPLATE % self._name, "r")
+      for line in f:
+        print line,
+    elif mode == "follow":
+      pos = findTailOffset(OUT_FILE_TEMPLATE % self._name, num_lines)
+      folowFrom(OUT_FILE_TEMPLATE % self._name, pos)
     else:
-      kill = self._config.get("kill")
-      if (kill != None) and (kill in TRUE_STR_VALUES):
-        os.kill(pid, signal.SIGKILL)
-      else:
-        os.kill(pid, signal.SIGTERM)
+      raise ServerManagerException("Unknown mode for out command: %s. Only tail|full|follow are supported." % mode)
 
-  def out(self):
-    pass
 
 class EDG6ServerManager(AS7BasedServerManager):
   """ServerManager for JBoss Enterprise Datagrid 6"""
@@ -330,20 +498,153 @@ class EDG6ServerManager(AS7BasedServerManager):
 class AS7RESTServerManager(AS7BasedServerManager):
   pass
 
-def createServerManager(config, name):
-  type = config.pop("type", None)
-  script = config.pop("script", None)
-  if type == None or type == "custom":
-    if script == None:
-      raise InvalidServerConfigException
+class ServerCommandExecutor:
+
+  def __init__(self, ispncon_config):
+    self.ispncon_config = ispncon_config
+
+  def _error(self, msg):
+    raise CommandExecutionError(msg)
+
+  def listServers(self):
+    try:
+      for server_name in self.ispncon_config.get_configured_servers():
+        try:
+          print server_name, self._createServerManager(server_name).getStatus()
+        except InvalidServerConfigException:
+          print server_name, "INVALID"
+    except ServerManagerException as e:
+      self._error(e.args[0])
+
+  def _createServerManager(self, server_name):
+    type = self.ispncon_config.get("server:%s.type" % server_name, None)
+    script = self.ispncon_config.get("server:%s.script" % server_name, None)
+    if type == None or type == "custom":
+      if script == None:
+        raise InvalidServerConfigException("script config key must be present for custom server manager")
+      else:
+        return ScriptServerManager(self.ispncon_config, server_name, script)
     else:
-      return ScriptServerManager(config, name, script)
-  else:  
-    if (type == "hotrod") or (type == "memcached"):
-      return InfinispanServerManager(config, name)
-    elif type == "edg":
-      return EDG6ServerManager(config, name)
-    elif type == "rest_as7":
-      return AS7RESTServerManager(config, name)
+      if (type == "hotrod") or (type == "memcached"):
+        return InfinispanServerManager(self.ispncon_config, server_name)
+      elif type == "edg":
+        return EDG6ServerManager(self.ispncon_config, server_name)
+      elif type == "rest_as7":
+        return AS7RESTServerManager(self.ispncon_config, server_name)
+      else:
+        raise InvalidServerConfigException("Unknown server type \"%s\"" % type)
+
+  """Parses and executes ispncon server commands"""
+  def executeCommand(self, server_command, args):
+    try:
+      if server_command == "start":
+        self.start(args)
+      elif server_command == "stop":
+        self.stop(args)
+      elif server_command == "out":
+        self.out(args)
+      else:
+        self._error("Unknown server command: %s" % server_command)
+    except ServerManagerException as e:
+      self._error(e.args[0])
+
+  def _parseOptsAndCreateManager(self, args, command, short_opts, long_opts):
+    try:
+      opts1, args1 = getopt.getopt(args, short_opts, long_opts)
+    except getopt.GetoptError:
+      self._error("Wrong server %s command syntax." % command)
+    if (len(args1) > 1):
+      self._error("Wrong server %s command syntax." % command)
+    if len(args1) == 1:
+      server_name = args1[0]
     else:
-      raise ServerManagerException("Unknown server type \"%s\"" % type)
+      server_name = self.ispncon_config.get("server_management.default_server")
+    if server_name == None:
+      self._error("Please specify server name or configure default server name.")
+
+    return opts1, self._createServerManager(server_name)
+
+  def start(self, args):
+    opts, serverManager = self._parseOptsAndCreateManager(args, "start", "l:p:d:D:P:w", ["listen-addr=", "listen-port=", "debug=", "debug-suspend=", "config", "wait-for-start"])
+
+    wait1 = False
+    config_overrides1 = {}
+
+    #override config with inline options
+    for opt, arg in opts:
+      if opt in ("-l", "--listen-addr"):
+        config_overrides1["listen_addr"] = arg
+      if opt in ("-p", "--listen-port"):
+        config_overrides1["listen_port"] = arg
+      if opt in ("-d", "--debug"):
+        config_overrides1["debug"] = "True"
+        config_overrides1["debug_port"] = arg
+        config_overrides1["debug_suspend"] = "False"
+      if opt in ("-D", "--debug-suspend"):
+        config_overrides1["debug"] = "True"
+        config_overrides1["debug_port"] = arg
+        config_overrides1["debug_suspend"] = "True"
+      if opt in ("-w", "--wait-for-start"):
+        wait1 = True
+      if opt in ("-P", "--config"):
+        kvpair = arg.split(" ")
+        if (len(kvpair) != 2):
+          self._error("invalid key value pair in -P option")
+        config_overrides1[kvpair[0]] = kvpair[1]
+
+    serverManager.start(wait=wait1, config_overrides=config_overrides1)
+
+  def stop(self, args):
+    opts, serverManager = self._parseOptsAndCreateManager(args, "stop", "P:ksw", ["config", "kill", "shutdown", "wait-for-stop"])
+    cfg_kill = self.ispncon_config.get("server_management.kill_by_default")
+    kill1 = ((cfg_kill != None) and (cfg_kill in TRUE_STR_VALUES))
+    wait1 = False
+    config_overrides1 = {}
+
+    #override config with inline options
+    for opt, arg in opts:
+      if opt in ("-k", "--kill"):
+        kill1 = True
+      if opt in ("-s", "--shutdown"):
+        kill1 = False
+      if opt in ("-w", "--wait-for-stop"):
+        wait1 = True
+      if opt in ("-P", "--config"):
+        kvpair = arg.split(" ")
+        if (len(kvpair) != 2):
+          self._error("invalid key value pair in -P option")
+        config_overrides1[kvpair[0]] = kvpair[1]
+
+    serverManager.stop(kill = kill1, wait = wait1, config_overrides = config_overrides1)
+
+  def out(self, args):
+    opts, serverManager = self._parseOptsAndCreateManager(args, "stop", "P:n:fFt", ["config", "num-lines", "follow", "full", "tail"])
+
+    try:
+      cfg_num_lines = int(self.ispncon_config.get("server_management.out_tail_size", "10"))
+    except ValueError:
+      raise InvalidServerConfigException("server_management.out_tail_size must be a number")
+
+    cfg_mode = self.ispncon_config.get("server_management.out_view", "tail")
+    config_overrides1 = {}
+
+    #override config with inline options
+    for opt, arg in opts:
+      if opt in ("-n", "--num-lines"):
+        try:
+          cfg_num_lines = int(arg)
+        except ValueError:
+          self._error("--num-lines or -n option must be a number")
+      if opt in ("-f", "--follow"):
+        cfg_mode = "follow"
+      if opt in ("-F", "--full"):
+        cfg_mode = "full"
+      if opt in ("-t", "--tail"):
+        cfg_mode = "tail"
+      if opt in ("-P", "--config"):
+        kvpair = arg.split(" ")
+        if (len(kvpair) != 2):
+          self._error("invalid key value pair in -P option")
+        config_overrides1[kvpair[0]] = kvpair[1]
+
+    serverManager.out(mode = cfg_mode, num_lines = cfg_num_lines, config_overrides = config_overrides1)

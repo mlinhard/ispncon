@@ -4,12 +4,12 @@
 """
 Command parsing and execution
 """
-from ispncon import ISPNCON_VERSION, HELP, USAGE, DEFAULT_CACHE_NAME, \
-  TRUE_STR_VALUES, NONE_VALUE
+from ispncon import ISPNCON_VERSION, HELP, USAGE, DEFAULT_CACHE_NAME, TRUE_STR_VALUES, NONE_VALUE,\
+  CommandExecutionError
 from ispncon.client import CacheClientError, ConflictError, NotFoundError
 from ispncon.codec import CODEC_NONE, CodecError
-from ispncon.servermanagement import ServerManagerException, DEFAULT_JAVA_OPTS_INTERNAL, \
-  createServerManager, InvalidServerConfigException
+from ispncon.servermanagement import ServerCommandExecutor
+
 import ConfigParser
 import getopt
 import ispncon
@@ -135,11 +135,6 @@ class Config(dict):
         if value != NONE_VALUE:
           sect[key] = value
     return sect
-
-class CommandExecutionError(Exception):
-  def __init__(self, msg, exit_code=1):
-    self.msg = msg
-    self.exit_code = exit_code
 
 class CommandExecutor:
   def __init__(self, config):
@@ -362,72 +357,13 @@ class CommandExecutor:
     self._get_client() # try to create new one
     print "STORED"
 
-  def _get_server_config_with_defaults(self, server_name):
-    server_config = self.config.get_section("server:" + server_name)
-    
-    if server_config.get("listen_addr") == None:
-      server_config["listen_addr"] = self.config.get("default_listen_addr")
-    if server_config.get("listen_port") == None:
-      server_config["listen_port"] = self.config.get("default_listen_port")
-    if server_config.get("java_opts") == None:
-      server_config["java_opts"] = self.config.get("default_java_opts")
-    if server_config.get("java_opts") == None:
-      server_config["java_opts"] = DEFAULT_JAVA_OPTS_INTERNAL
-
-    return server_config
 
   def _cmd_server(self, args):
+    executor = ServerCommandExecutor(self.config)
     if (len(args) == 0):
-      # we want to print the configured servers and their statuses
-      for server_name in self.config.get_configured_servers():
-        server_config = self._get_server_config_with_defaults(server_name)
-        server_manager = createServerManager(server_config, server_name)
-        print server_name, server_manager.getStatus()
-      return
-    server_command = args[0]
-    try:
-      opts1, args1 = getopt.getopt(args[1:], "h:p:d:D:P:k", ["host=", "port=", "debug=", "debug-suspend=", "config", "kill"])
-    except getopt.GetoptError:
-      self._error("Wrong server command syntax.")
-    if (len(args1) > 1):
-      self._error("Wrong server command syntax.")
-    if len(args1) == 1:
-      server_name = args1[0]
+      executor.listServers()
     else:
-      server_name = self.config.get("server_management.default_server")
-      if server_name == None:
-        self._error("Please specify server name or configure default server name.")
-
-    server_config = self._get_server_config_with_defaults(server_name)
-
-    #override config with inline options
-    for opt, arg in opts1:
-      if opt in ("-h", "--host"):
-        server_config["listen_addr"] = arg
-      if opt in ("-p", "--port"):
-        server_config["listen_port"] = arg
-      if opt in ("-d", "--debug"):
-        server_config["debug"] = "True"
-        server_config["debug_port"] = arg
-        server_config["debug_suspend"] = "False"
-      if opt in ("-D", "--debug-suspend"):
-        server_config["debug"] = "True"
-        server_config["debug_port"] = arg
-        server_config["debug_suspend"] = "True"
-      if opt in ("-k", "--kill"):
-        server_config["kill"] = "True"
-      if opt in ("-P", "--config"):
-        kvpair = arg.split(" ")
-        if (len(kvpair) != 2):
-          self._error("invalid key value pair in -P option")
-        server_config[kvpair[0]] = kvpair[1]
-
-    try:
-      createServerManager(server_config, server_name).executeCommand(server_command)
-    except ServerManagerException as e:
-      self._error(e.args[0])
-    except InvalidServerConfigException as e:
-      self._error("Server config \"%s\" is invalid." % server_name)
+      executor.executeCommand(args[0], args[1:])
 
   def _error(self, msg):
     raise CommandExecutionError(msg)
@@ -435,7 +371,7 @@ class CommandExecutor:
   def _possiblyexit(self, exit_code):
     if self.exit_on_error:
       sys.exit(exit_code)
-      
+
   def execute(self, line):
     if (line == None or line.strip() == ""):
       return
@@ -482,9 +418,9 @@ class CommandExecutor:
 def main(args):
   try:
     opts, args = getopt.getopt(sys.argv[1:], "c:h:p:C:veP:", ["client=", "host=", "port=", "cache-name=", "version", "exit-on-error", "config="])
-  except getopt.GetoptError:          
-    print USAGE              
-    sys.exit(2)     
+  except getopt.GetoptError:
+    print USAGE
+    sys.exit(2)
 
   config = Config() # values here will be overriden by anything passed in commandline
   script_name = sys.argv[0]

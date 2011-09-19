@@ -7,7 +7,7 @@ Constant definition
 __author__ = "Michal Linhard"
 __copyright__ = "(C) 2011 Red Hat Inc."
 
-ISPNCON_VERSION = "0.8.1-SNAPSHOT"
+ISPNCON_VERSION = "0.8.2-SNAPSHOT"
 
 USAGE = """USAGE: ispncon [options] <operation> [operation_options] <op_arguments>
     -c --client                 client to use, possible values hotrod(default), memcached, rest
@@ -190,4 +190,9 @@ HELP = {
 DEFAULT_CACHE_NAME = "___defaultcache"
 TRUE_STR_VALUES = [ "True", "true", "1" ]
 NONE_VALUE = [ "None" ]
+
+class CommandExecutionError(Exception):
+  def __init__(self, msg, exit_code=1):
+    self.msg = msg
+    self.exit_code = exit_code
 
