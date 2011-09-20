@@ -168,18 +168,30 @@ hotrod, memcached   - this will run standard standalone hotrod/memcached server 
 rest_as7            - this will run JBoss Application Server 7 instance and deploy
                       modules/rest/infinispan-server-rest.war into it from Infinispan distribution
 
+                      the deployment will happen only if rest server isn't already deployed
+
                       config properties:
 
                       jboss_home - REQUIRED, JBoss AS7 home directory
-                      ispn_home  - REQUIRED, rest server WAR will be copied from there
-                      config_xml - OPTIONAL, interpreted as path to infinispan configuration xml file,
-                                   this will be inserted into the WAR file to be deployed
+                      ispn_home  - REQUIRED*, rest server WAR will be copied from there
+                                   * required only for war deployment, if the war is already deployed
+                                     it is not needed
+                      config_xml - interpreted as path to a config file, whose contents
+                                   will overwrite <jboss_home>/standalone/configuration/standalone.xml
+
+                      infinispan_config_xml - OPTIONAL, interpreted as path to infinispan configuration
+                                   xml file, this will be inserted into the WAR file to be deployed
+
+                      deployment_name - OPTIONAL, defaults to "infinispan-server-rest.war"
+                                   server manager will check for the presence of
+                                   <jboss_home>/standalone/deployments/<deployment_name> before running the server
 
                       + all standard config keys are supported and OPTIONAL except
 
                       listen_addr - OPTIONAL, if specified, standalone.xml (after possibly replaced by config_xml)
                                     is edited so that interface binding is replaced with this value
                       listen_port - IGNORED, has to be set manually in standalone.xml
+
 
 edg                 - this will manage JBoss Enterprise Datagrid 6
                     - this instance when running usually contains all server modules (endpoints)
@@ -189,7 +201,7 @@ edg                 - this will manage JBoss Enterprise Datagrid 6
 
                       jboss_home   - REQUIRED, interpreted as home directory of JBoss EDG6
                       config_xml - interpreted as path to a config file, whose contents
-                                   will overwrite <edg_home>/standalone/configuration/standalone.xml
+                                   will overwrite <jboss_home>/standalone/configuration/standalone.xml
 
                       + all standard config keys are supported and OPTIONAL except
 

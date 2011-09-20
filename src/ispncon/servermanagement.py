@@ -16,11 +16,13 @@ import shutil
 import signal
 import subprocess
 import time
+from zipfile import ZipFile
 
 XMLNS_DOMAIN = "urn:jboss:domain:1.0"
 BAK = ".ispncon.backup"
-DEFAULT_JAVA_OPTS_INTERNAL = "-Xms64m -Xmx256m -XX:MaxPermSize=128m -Djava.net.preferIPv4Stack=true -Dorg.jboss.resolver.warning=true -Dsun.rmi.dgc.client.gcInterval=3600000 -Dsun.rmi.dgc.server.gcInterval=3600000 -Djboss.modules.system.pkgs=org.jboss.byteman"
+DEFAULT_JAVA_OPTS_INTERNAL_EDG = "-Xms64m -Xmx256m -XX:MaxPermSize=128m -Djava.net.preferIPv4Stack=true -Dorg.jboss.resolver.warning=true -Dsun.rmi.dgc.client.gcInterval=3600000 -Dsun.rmi.dgc.server.gcInterval=3600000 -Djboss.modules.system.pkgs=org.jboss.byteman"
 DEFAULT_DEBUG_PORT = 8787
+DEFAULT_REST_WAR_NAME = "infinispan-server-rest.war"
 
 register_namespace("domain"       , XMLNS_DOMAIN) 
 register_namespace("logging"      , "urn:jboss:domain:logging:1.0")
@@ -37,11 +39,6 @@ register_namespace("naming"       , "urn:jboss:domain:naming:1.0")
 register_namespace("remoting"     , "urn:jboss:domain:remoting:1.0") 
 register_namespace("security"     , "urn:jboss:domain:security:1.0")
 register_namespace("threads"      , "urn:jboss:domain:threads:1.0")
-
-#TODO: xml config parser/overwrite tool
-#TODO: InfinispanServerManager
-#TODO: EDG6ServerManager
-#TODO: AS7RESTServerManager
 
 PID_FILE_TEMPLATE = "/tmp/ispncon.server.%s.pid"
 OUT_FILE_TEMPLATE = "/tmp/ispncon.server.%s.out"
@@ -140,6 +137,30 @@ def findTailOffset(file, lines):
   f.close()
   return pos
 
+def waitForLine(file, patterns):
+  """Wait until a line that matches a pattern appears in the given file. The file might be a constantly growing log."""
+  try:
+    # wait until file exists
+    while not os.path.exists(file):
+      time.sleep(ACTIVE_WAIT_SLEEP)
+
+    # wait until the pattern is found in a line
+    f = io.open(file, "r")
+    line = f.readline()
+    while True:
+      if line:
+        for result, pattern in patterns.iteritems():
+          if re.match(pattern, line): # line matches
+            return result
+          else: # line doesn't match the pattern
+            line = f.readline()
+      else: # line not available
+        time.sleep(ACTIVE_WAIT_SLEEP)
+        line = f.readline()
+    f.close()
+  except KeyboardInterrupt:
+    print "Waiting interrupted."
+
 class ServerManagerException(Exception):
   """Exception in ServerManager"""
   pass
@@ -150,7 +171,7 @@ class InvalidServerConfigException(ServerManagerException):
 
 class ServerManager():
   """Superclass for server managers"""
-  
+
   def __init__(self, ispncon_config, server_name):
     self._ispncon_config = ispncon_config
     self._config = self._get_server_config_with_defaults(server_name)
@@ -160,15 +181,23 @@ class ServerManager():
     server_config = self._ispncon_config.get_section("server:" + server_name)
 
     if server_config.get("listen_addr") == None:
-      server_config["listen_addr"] = self._ispncon_config.get("default_listen_addr")
+      dla = self._ispncon_config.get("default_listen_addr")
+      if dla:
+        server_config["listen_addr"] = dla
     if server_config.get("listen_port") == None:
-      server_config["listen_port"] = self._ispncon_config.get("default_listen_port")
+      dlp = self._ispncon_config.get("default_listen_port")
+      if dlp:
+        server_config["listen_port"] = dlp
     if server_config.get("java_opts") == None:
-      server_config["java_opts"] = self._ispncon_config.get("default_java_opts")
-    if server_config.get("java_opts") == None:
-      server_config["java_opts"] = DEFAULT_JAVA_OPTS_INTERNAL
+      djo = self._ispncon_config.get("default_java_opts")
+      if djo:
+        server_config["java_opts"] = djo
 
     return server_config
+
+  def _applyConfigOverrides(self, overrides):
+    for key, value in overrides.iteritems():
+      self._config[key] = value
 
   def start(self, wait=False, config_overrides={}):
     """Start the server instance"""
@@ -183,6 +212,9 @@ class ServerManager():
 
   def getStatus(self):
     raise ServerManagerException("Not implemented")
+
+  def jstack(self):
+    raise ServerManagerException("jstack command is not supported for this server manager")
 
 class ScriptServerManager(ServerManager):
   """ServerManager that uses custom management script to controll the server"""
@@ -248,191 +280,25 @@ class ScriptServerManager(ServerManager):
 
 
 class BuiltInServerManager(ServerManager):
+  """Common superclass for built-in server managers"""
 
   def writePid(self, pid):
     pidfile = open(PID_FILE_TEMPLATE % self._name, "w")
     pidfile.write(str(pid))
     pidfile.close()
 
-  def _waitForLine(self, file, patterns):
-    """Wait until a line that matches a pattern appears in the given file. The file might be a constantly growing log."""
-    try:
-      # wait until file exists
-      while not os.path.exists(file):
-        time.sleep(ACTIVE_WAIT_SLEEP)
-
-      # wait until the pattern is found in a line
-      f = io.open(file, "r")
-      line = f.readline()
-      while True:
-        if line:
-          for result, pattern in patterns.iteritems():
-            if re.match(pattern, line): # line matches
-              return result
-            else: # line doesn't match the pattern
-              line = f.readline()
-        else: # line not available
-          time.sleep(ACTIVE_WAIT_SLEEP)
-          line = f.readline()
-      f.close()
-    except KeyboardInterrupt:
-      print "Waiting interrupted."
-
-  def _validate_ispn_home(self, path):
-    if not (os.path.exists(path) and os.path.isdir(path)):
-      raise InvalidServerConfigException("ispn_home directory doesn't exist: %s" % path)
-    checkpath = path + "/bin"
-    if not (os.path.exists(checkpath) and os.path.isdir(checkpath)):
-      raise InvalidServerConfigException("Invalid ispn_home directory: %s. Missing bin subdirectory." % path)
-    checkpath = path + "/bin/startServer.sh"
-    if not (os.path.exists(checkpath) and os.path.isfile(checkpath)):
-      raise InvalidServerConfigException("Invalid ispn_home directory: %s. Missing startServer.sh script." % path)
-    if not os.access(checkpath, os.X_OK):
-      raise InvalidServerConfigException("Problem in ispn_home directory: %s. startServer.sh is not executable." % path)
-
-class InfinispanServerManager(BuiltInServerManager):
-  """ServerManager for standard community Infinispan server"""
-
-  def __init__(self, ispncon_config, server_name):
-    BuiltInServerManager.__init__(self, ispncon_config, server_name)
-    ispn_home = self._config.get("ispn_home")
-    if ispn_home == None:
-      raise InvalidServerConfigException("ispn_home config key is required for hotrod/memcached server manager")
-    self._validate_ispn_home(ispn_home)
-
-class AS7ConfigXmlEditor:
-  """Encapsulates the knowledge about structure of standalone.xml configuration file for AS7"""
-  def __init__(self, path):
-    self._path = path
-    self._tree = parse(self._path)
-
-  def _getxpath(self, xpath, *namespaces):
-    return self._tree.getroot().findall(xpath.format(*[("{%s}" % s) for s in namespaces]))
-
-  def setAllInterfaces(self, addr):
-    inet_addrs = self._getxpath("{0}interfaces/{0}interface/{0}inet-address", XMLNS_DOMAIN)
-    if inet_addrs != None:
-      for inet_addr in inet_addrs:
-        inet_addr.attrib["value"] = addr
-
-  def save(self):
-    backupxml = self._path + BAK
-    if not os.path.exists(backupxml):
-      shutil.copyfile(self._path, backupxml)
-    self._tree.write(self._path, encoding="UTF-8")
-
-class AS7BasedServerManager(BuiltInServerManager):
-  """ServerManager for servers based on JBoss AS 7"""
-
-  def __init__(self, ispncon_config, server_name):
-    BuiltInServerManager.__init__(self, ispncon_config, server_name)
-    self.jboss_home = self._config.get("jboss_home")
-    if self.jboss_home == None:
-      raise InvalidServerConfigException("jboss_home config key is required for AS7 based server manager")
-    self._validate_jbossas7_home(self.jboss_home)
-
-  def _validate_jbossas7_home(self, path):
-    if not (os.path.exists(path) and os.path.isdir(path)):
-      raise InvalidServerConfigException("jboss_home directory doesn't exist: %s" % path)
-    checkpath = path + "/bin"
-    if not (os.path.exists(checkpath) and os.path.isdir(checkpath)):
-      raise InvalidServerConfigException("Invalid jboss_home directory: %s. Missing bin subdirectory." % path)
-    checkpath = path + "/standalone"
-    if not (os.path.exists(checkpath) and os.path.isdir(checkpath)):
-      raise InvalidServerConfigException("Invalid jboss_home directory: %s. Missing standalone subdirectory." % path)
-    checkpath = path + "/bin/standalone.sh"
-    if not (os.path.exists(checkpath) and os.path.isfile(checkpath)):
-      raise InvalidServerConfigException("Invalid jboss_home directory: %s. Missing standalone.sh script." % path)
-    if not os.access(checkpath, os.X_OK):
-      raise InvalidServerConfigException("Problem in jboss_home directory: %s. standalone.sh is not executable." % path)
-    if not (os.path.exists(checkpath) and os.path.isfile(checkpath)):
-      raise InvalidServerConfigException("Invalid jboss_home directory: %s. Missing standalone.xml config file." % path)
-
-  def _applyConfigOverrides(self, overrides):
-    for key, value in overrides:
-      self._config[key] = value
-
-  def start(self, wait=False, config_overrides={}):
-    try:
-      self._applyConfigOverrides(config_overrides)
-      if self.findPid() != -1:
-        raise ServerManagerException("Server is already running.")
-
-      binary = self.jboss_home + "/bin/standalone.sh"
-      standaloneXml = self.jboss_home + "/standalone/configuration/standalone.xml"
-
-      # user supplied config exists
-      config_xml = self._config.get("config_xml")
-      if config_xml != None:
-        backupxml = standaloneXml + BAK
-        if not os.path.exists(backupxml):
-          shutil.copyfile(self._path, backupxml)
-        shutil.copyfile(config_xml, standaloneXml) #overwrite old standalone.xml
-
-      # we want to change hostname in the config
-      listen_addr = self._config.get("listen_addr")
-      if (listen_addr != None):
-        editor = AS7ConfigXmlEditor(standaloneXml)
-        editor.setAllInterfaces(listen_addr)
-        editor.save() # this will create backup if previous step didn't
-
-      if (self._config.get("listen_port") != None):
-        print "WARNING: listen_port config key is ignored in AS7 based server manager"
-
-      java_opts = self._config.get("java_opts")
-      debug = self._config.get("debug")
-      if debug != None and debug in TRUE_STR_VALUES:
-        debug_suspend = self._config.get("debug_suspend")
-        debug_port = self._config.get("debug_port", DEFAULT_DEBUG_PORT)
-        suspend = "n"
-        if debug_suspend != None and debug_suspend in TRUE_STR_VALUES:
-          suspend = "y"
-        java_opts = "%s -Xrunjdwp:transport=dt_socket,address=%s,server=y,suspend=%s" % (java_opts, debug_port, suspend)
-      java_opts += " -Dispncon.server.name=%s" % self._name
-
-      args = [binary]
-      env1 = { "JAVA_OPTS" : java_opts }
-
-      outfile_name = OUT_FILE_TEMPLATE % self._name
-      outfile = open(outfile_name, 'w')
-
-      #here we're just spawning a process and ending this one
-      p = subprocess.Popen(args, env=env1, stdout=outfile, stderr=STDOUT)
-      self.writePid(p.pid)
-
-      if (wait):
-        result = self._waitForLine(outfile_name, { "ok" : ".*[org\.jboss\.as].*started in.*", "error" : ".*[org\.jboss\.as].*started (with errors) in.*" })
-        if result == "ok":
-          print "SERVER_START " + self._name
-        elif result == "error":
-          print "SERVER_START_WITH_ERRORS " + self._name
-      else:
-        print "SERVER_START " + self._name
-    except Exception as e:
-      raise ServerManagerException(e.args[0])
+class JavaServerManager(BuiltInServerManager):
+  """Server manager superclass for all JVM based servers"""
 
   def findPid(self):
     return jpsgrep("-Dispncon.server.name="+self._name)
 
-  def getStatus(self):
-    """
-    will return one of these:
-    INVALID - invalid configuration, or error occured
-    RUNNING - server is running
-    STOPPED - server is not running
+  def checkRunning(self):
+    if self.findPid() != -1:
+      raise ServerManagerException("Server is already running.")
 
-    how to determine status:
-    
-    check if there's a java process running with string -Dispncon.server.name=<name> in the command
-    if not:
-       STOPPED
-       delete following files if they exist:
-       /tmp/ispncon.server.<name>.out 
-       /tmp/ispncon.server.<name>.pid
-    if yes:
-       RUNNING
-       check if /tmp/ispncon.server.<name>.pid exists, if not, create it
-    """
+  def getStatus(self):
+    """return server status"""
     try:
       pid = self.findPid()
       pidfile = PID_FILE_TEMPLATE % self._name
@@ -479,7 +345,9 @@ class AS7BasedServerManager(BuiltInServerManager):
     if self.findPid() == -1:
       raise ServerManagerException("Server is not running.")
     if mode == "tail":
-      tailFile(OUT_FILE_TEMPLATE % self._name, num_lines)
+      taillines = tailFile(OUT_FILE_TEMPLATE % self._name, num_lines)
+      for line in taillines:
+        print line
     elif mode == "full":
       f = open(OUT_FILE_TEMPLATE % self._name, "r")
       for line in f:
@@ -490,13 +358,244 @@ class AS7BasedServerManager(BuiltInServerManager):
     else:
       raise ServerManagerException("Unknown mode for out command: %s. Only tail|full|follow are supported." % mode)
 
+  def jstack(self):
+    try:
+      pid = self.findPid()
+      if pid == -1:
+        raise ServerManagerException("Server is not running.")
+
+      p = subprocess.Popen([ "jstack", str(pid) ])
+      p.wait()
+    except ServerManagerException as e:
+      raise e
+    except Exception as e:
+      raise ServerManagerException(e.args[0])
+
+
+class InfinispanServerManager(JavaServerManager):
+  """ServerManager for standard community Infinispan server"""
+
+  def __init__(self, ispncon_config, server_name):
+    BuiltInServerManager.__init__(self, ispncon_config, server_name)
+    self.ispn_home = self._config.get("ispn_home")
+    if self.ispn_home == None:
+      raise InvalidServerConfigException("ispn_home config key is required for hotrod/memcached server manager")
+    self._validate_ispn_home(self.ispn_home)
+
+  def _validate_ispn_home(self, path):
+    if not (os.path.exists(path) and os.path.isdir(path)):
+      raise InvalidServerConfigException("ispn_home directory doesn't exist: %s" % path)
+    checkpath = path + "/bin"
+    if not (os.path.exists(checkpath) and os.path.isdir(checkpath)):
+      raise InvalidServerConfigException("Invalid ispn_home directory: %s. Missing bin subdirectory." % path)
+    checkpath = path + "/bin/startServer.sh"
+    if not (os.path.exists(checkpath) and os.path.isfile(checkpath)):
+      raise InvalidServerConfigException("Invalid ispn_home directory: %s. Missing startServer.sh script." % path)
+    if not os.access(checkpath, os.X_OK):
+      raise InvalidServerConfigException("Problem in ispn_home directory: %s. startServer.sh is not executable." % path)
+
+  def start(self, wait=False, config_overrides={}):
+    try:
+      self._applyConfigOverrides(config_overrides)
+      self.checkRunning()
+
+      if wait:
+        print "WARNING: wait-for-start not supported in memcached/hotrod server manager."
+
+      #TODO: change for Windows
+      binary = self.ispn_home + "/bin/startServer.sh"
+
+      java_opts = self._config.get("java_opts")
+      debug = self._config.get("debug")
+      if debug != None and debug in TRUE_STR_VALUES:
+        debug_suspend = self._config.get("debug_suspend")
+        debug_port = self._config.get("debug_port", DEFAULT_DEBUG_PORT)
+        suspend = "n"
+        if debug_suspend != None and debug_suspend in TRUE_STR_VALUES:
+          suspend = "y"
+        java_opts = "%s -Xrunjdwp:transport=dt_socket,address=%s,server=y,suspend=%s" % (java_opts, debug_port, suspend)
+      java_opts += " -Dispncon.server.name=%s" % self._name
+
+      args = [binary, "-r", self._config["type"]]
+      listen_addr = self._config.get("listen_addr")
+      if listen_addr:
+        args.append("-l")
+        args.append(listen_addr)
+      listen_port = self._config.get("listen_port")
+      if listen_port:
+        args.append("-p")
+        args.append(listen_port)
+      config_xml = self._config.get("config_xml")
+      if config_xml:
+        args.append("-c")
+        args.append(config_xml)
+
+      env1 = { "JVM_PARAMS" : java_opts, "JAVA_HOME" : os.environ["JAVA_HOME"] }
+
+      outfile_name = OUT_FILE_TEMPLATE % self._name
+      outfile = open(outfile_name, 'w')
+
+      #here we're just spawning a process and ending this one
+      p = subprocess.Popen(args, env=env1, stdout=outfile, stderr=STDOUT)
+      self.writePid(p.pid)
+      print "SERVER_START " + self._name
+    except Exception as e:
+      raise ServerManagerException(e.args[0])
+
+class AS7ConfigXmlEditor:
+  """Encapsulates the knowledge about structure of standalone.xml configuration file for AS7"""
+  def __init__(self, path):
+    self._path = path
+    self._tree = parse(self._path)
+
+  def _getxpath(self, xpath, *namespaces):
+    return self._tree.getroot().findall(xpath.format(*[("{%s}" % s) for s in namespaces]))
+
+  def setAllInterfaces(self, addr):
+    inet_addrs = self._getxpath("{0}interfaces/{0}interface/{0}inet-address", XMLNS_DOMAIN)
+    if inet_addrs != None:
+      for inet_addr in inet_addrs:
+        inet_addr.attrib["value"] = addr
+
+  def save(self):
+    backupxml = self._path + BAK
+    if not os.path.exists(backupxml):
+      shutil.copyfile(self._path, backupxml)
+    self._tree.write(self._path, encoding="UTF-8")
+
+class AS7BasedServerManager(JavaServerManager):
+  """ServerManager for servers based on JBoss AS 7"""
+
+  def __init__(self, ispncon_config, server_name):
+    JavaServerManager.__init__(self, ispncon_config, server_name)
+    self.jboss_home = self._config.get("jboss_home")
+    if self.jboss_home == None:
+      raise InvalidServerConfigException("jboss_home config key is required for AS7 based server manager")
+    self._validate_jbossas7_home(self.jboss_home)
+
+  def _validate_jbossas7_home(self, path):
+    if not (os.path.exists(path) and os.path.isdir(path)):
+      raise InvalidServerConfigException("jboss_home directory doesn't exist: %s" % path)
+    checkpath = path + "/bin"
+    if not (os.path.exists(checkpath) and os.path.isdir(checkpath)):
+      raise InvalidServerConfigException("Invalid jboss_home directory: %s. Missing bin subdirectory." % path)
+    checkpath = path + "/standalone"
+    if not (os.path.exists(checkpath) and os.path.isdir(checkpath)):
+      raise InvalidServerConfigException("Invalid jboss_home directory: %s. Missing standalone subdirectory." % path)
+    checkpath = path + "/bin/standalone.sh"
+    if not (os.path.exists(checkpath) and os.path.isfile(checkpath)):
+      raise InvalidServerConfigException("Invalid jboss_home directory: %s. Missing standalone.sh script." % path)
+    if not os.access(checkpath, os.X_OK):
+      raise InvalidServerConfigException("Problem in jboss_home directory: %s. standalone.sh is not executable." % path)
+    if not (os.path.exists(checkpath) and os.path.isfile(checkpath)):
+      raise InvalidServerConfigException("Invalid jboss_home directory: %s. Missing standalone.xml config file." % path)
+
+  def startAS7(self, wait=False):
+    try:
+      #TODO: change for Windows
+      binary = self.jboss_home + "/bin/standalone.sh"
+      standaloneXml = self.jboss_home + "/standalone/configuration/standalone.xml"
+
+      # user supplied config exists
+      config_xml = self._config.get("config_xml")
+      if config_xml != None:
+        backupxml = standaloneXml + BAK
+        if not os.path.exists(backupxml):
+          shutil.copyfile(self._path, backupxml)
+        shutil.copyfile(config_xml, standaloneXml) #overwrite old standalone.xml
+
+      # we want to change hostname in the config
+      listen_addr = self._config.get("listen_addr")
+      if (listen_addr != None):
+        editor = AS7ConfigXmlEditor(standaloneXml)
+        editor.setAllInterfaces(listen_addr)
+        editor.save() # this will create backup if previous step didn't
+
+      if (self._config.get("listen_port") != None):
+        print "WARNING: listen_port config key is ignored in AS7 based server manager"
+
+      java_opts = self._config.get("java_opts", "")
+      debug = self._config.get("debug")
+      if debug != None and debug in TRUE_STR_VALUES:
+        debug_suspend = self._config.get("debug_suspend")
+        debug_port = self._config.get("debug_port", DEFAULT_DEBUG_PORT)
+        suspend = "n"
+        if debug_suspend != None and debug_suspend in TRUE_STR_VALUES:
+          suspend = "y"
+        java_opts = "%s -Xrunjdwp:transport=dt_socket,address=%s,server=y,suspend=%s" % (java_opts, debug_port, suspend)
+      java_opts += " -Dispncon.server.name=%s" % self._name
+
+      args = [binary]
+      env1 = { "JAVA_OPTS" : java_opts }
+
+      outfile_name = OUT_FILE_TEMPLATE % self._name
+      outfile = open(outfile_name, 'w')
+
+      #here we're just spawning a process and ending this one
+      p = subprocess.Popen(args, env=env1, stdout=outfile, stderr=STDOUT)
+      self.writePid(p.pid)
+
+      if (wait):
+        result = waitForLine(outfile_name, { "ok" : ".*[org\.jboss\.as].*started in.*", "error" : ".*[org\.jboss\.as].*started (with errors) in.*" })
+        if result == "ok":
+          print "SERVER_START " + self._name
+        elif result == "error":
+          print "SERVER_START_WITH_ERRORS " + self._name
+      else:
+        print "SERVER_START " + self._name
+    except Exception as e:
+      raise ServerManagerException(e.args[0])
+
 
 class EDG6ServerManager(AS7BasedServerManager):
   """ServerManager for JBoss Enterprise Datagrid 6"""
-  pass
+
+  def __init__(self, ispncon_config, server_name):
+    AS7BasedServerManager.__init__(self, ispncon_config, server_name)
+    if self._config.get("java_opts") == None:
+      self._config["java_opts"] = DEFAULT_JAVA_OPTS_INTERNAL_EDG
+
+  def start(self, wait=False, config_overrides={}):
+    self._applyConfigOverrides(config_overrides)
+    self.checkRunning()
+    self.startAS7(wait)
+
 
 class AS7RESTServerManager(AS7BasedServerManager):
-  pass
+  """ServerManager for REST server module + AS7 combination"""
+
+  def __init__(self, ispncon_config, server_name):
+    AS7BasedServerManager.__init__(self, ispncon_config, server_name)
+    if self._config.get("deployment_name") == None:
+      self._config["deployment_name"] = DEFAULT_REST_WAR_NAME
+
+  def start(self, wait=False, config_overrides={}):
+    self._applyConfigOverrides(config_overrides)
+    self.checkRunning()
+    self.checkRestWar()
+    self.startAS7(wait)
+
+  def checkRestWar(self):
+    #check whether we need to create and deploy the WAR
+    deployment_name = self._config["deployment_name"]
+    deployment_path = self.jboss_home + "/standalone/deployments/" + deployment_name;
+    if not os.path.exists(deployment_path):
+      ispn_home = self._config.get("ispn_home")
+      if not ispn_home:
+        raise ServerManagerException("ispn_home is needed to install Infinispan REST server WAR deployment.")
+      deployment_source = ispn_home + "/modules/rest/infinispan-server-rest.war"
+      shutil.copyfile(deployment_source, deployment_path)
+      ispn_cfg = self._config.get("infinispan_config_xml")
+      if ispn_cfg:
+        if not os.path.exists(ispn_cfg):
+          raise ServerManagerException("the config file specified in infinispan_config_xml doesn't exist")
+        warzip = ZipFile(deployment_path, "a")
+        warzip.write(ispn_cfg, "WEB-INF/classes/infinispan.xml")
+        warzip.close()
+    else:
+      #if deployment exists but is failed, retry the deployment on startup
+      if os.path.exists(deployment_path + ".failed"):
+        os.remove(deployment_path + ".failed")
 
 class ServerCommandExecutor:
 
@@ -543,6 +642,8 @@ class ServerCommandExecutor:
         self.stop(args)
       elif server_command == "out":
         self.out(args)
+      elif server_command == "jstack":
+        self.jstack(args)
       else:
         self._error("Unknown server command: %s" % server_command)
     except ServerManagerException as e:
@@ -648,3 +749,6 @@ class ServerCommandExecutor:
         config_overrides1[kvpair[0]] = kvpair[1]
 
     serverManager.out(mode = cfg_mode, num_lines = cfg_num_lines, config_overrides = config_overrides1)
+
+  def jstack(self, args):
+    self._parseOptsAndCreateManager(args, "jstack", "", [])[1].jstack()

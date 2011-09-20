@@ -29,7 +29,7 @@ KNOWN_CONFIG_KEYS = [
   "server:.listen_addr", "server:.listen_port", "server:.script", "server:.jboss_home", "server:.ispn_home",
   "server:.debug", "server:.debug_port", "server:.debug_suspend", "server:.type", "server:.config_xml",
   "ispncon_home", "server_management.default_listen_addr", "server_management.default_listen_port",
-  "server_management.default_java_opts", "server:.out_view", "server:.out_tail_size"]
+  "server_management.default_java_opts", "server:.out_view", "server:.out_tail_size", "server:.infinispan_config_xml", "server:.deployment_name"]
 
 # keys that won't be stored in ~/.ispncon
 TRANSIENT_KEYS = [ "ispncon_home" ]
@@ -422,36 +422,36 @@ def main(args):
     print USAGE
     sys.exit(2)
 
-  config = Config() # values here will be overriden by anything passed in commandline
-  script_name = sys.argv[0]
-  if os.path.exists(script_name):
-    idx = string.rfind(script_name, "/bin")
-    if idx != -1:
-      config["ispncon_home"] = script_name[0:idx]
-  for opt, arg in opts:
-    if opt in ("-c", "--client"):
-      config["client_type"] = arg
-    if opt in ("-h", "--host"):
-      config["host"] = arg
-    if opt in ("-p", "--port"):
-      config["port"] = arg
-    if opt in ("-C", "--cache-name"):
-      config["cache"] = arg
-    if opt in ("-v", "--version"):
-      print ISPNCON_VERSION
-      sys.exit(0)
-    if opt in ("-e", "--exit-on-error"):
-      config["exit_on_error"] = "True"
-    if opt in ("-P", "--config"):
-      params = arg.split(" ")
-      if (len(params) != 2):
+  try:
+    config = Config() # values here will be overriden by anything passed in commandline
+    script_name = sys.argv[0]
+    if os.path.exists(script_name):
+      idx = string.rfind(script_name, "/bin")
+      if idx != -1:
+        config["ispncon_home"] = script_name[0:idx]
+    for opt, arg in opts:
+      if opt in ("-c", "--client"):
+        config["client_type"] = arg
+      if opt in ("-h", "--host"):
+        config["host"] = arg
+      if opt in ("-p", "--port"):
+        config["port"] = arg
+      if opt in ("-C", "--cache-name"):
+        config["cache"] = arg
+      if opt in ("-v", "--version"):
         print ISPNCON_VERSION
         sys.exit(0)
-      try:
+      if opt in ("-e", "--exit-on-error"):
+        config["exit_on_error"] = "True"
+      if opt in ("-P", "--config"):
+        params = arg.split(" ")
+        if (len(params) != 2):
+          print USAGE
+          sys.exit(2)
         config[params[0]] = params[1]
-      except CommandExecutionError as e:
-        print e.msg
-        sys.exit(1)
+  except CommandExecutionError as e:
+    print e.msg
+    sys.exit(1)
 
   executor = CommandExecutor(config)
   isatty = sys.stdin.isatty()
